@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="42" height="24" viewBox="0 0 42 24">
+  <style>
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+  </style>
+  <circle cx="9" cy="12" r="3" fill="#5E5CFF" style="animation:pulse 1.2s ease-in-out infinite"/>
+  <circle cx="21" cy="12" r="3" fill="#5E5CFF" style="animation:pulse 1.2s ease-in-out infinite;animation-delay:150ms"/>
+  <circle cx="33" cy="12" r="3" fill="#5E5CFF" style="animation:pulse 1.2s ease-in-out infinite;animation-delay:300ms"/>
+</svg>

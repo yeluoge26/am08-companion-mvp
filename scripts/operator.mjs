@@ -1,0 +1,21 @@
+// Run only on the trusted deployment host. Never expose this CLI over HTTP.
+import {DatabaseSync} from 'node:sqlite';
+import {randomBytes,scryptSync} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+const root=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const dir=path.resolve(process.env.DATA_DIR||path.join(root,'data'));
+const [command,email]=process.argv.slice(2);
+if(!['promote','reset-password','backup'].includes(command)){console.error('Usage: node scripts/operator.mjs promote|reset-password <email> OR backup\nPassword reset requires NEW_PASSWORD environment variable.');process.exit(1)}
+if(!fs.existsSync(path.join(dir,'app.sqlite')))throw Error('Database does not exist. Start the server once first.');
+const db=new DatabaseSync(path.join(dir,'app.sqlite'));db.exec('PRAGMA busy_timeout=5000');
+if(command==='backup'){const file=path.join(dir,'backup-'+Date.now()+'.sqlite');db.prepare('VACUUM INTO ?').run(file);console.log('Consistent database backup created: '+file)}else{
+ const user=db.prepare('SELECT id,email FROM users WHERE email=?').get(String(email).toLowerCase());if(!user)throw Error('Account not found');
+ db.exec('BEGIN IMMEDIATE');try{
+ if(command==='promote')db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user.id);
+ else{const p=process.env.NEW_PASSWORD;if(!p||p.length<12||p.length>128)throw Error('Set NEW_PASSWORD to a unique 12–128 character value');const salt=randomBytes(16).toString('hex'),digest=scryptSync(p,salt,64).toString('hex');db.prepare('UPDATE users SET password=? WHERE id=?').run(salt+':'+digest,user.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id)}
+ db.prepare('INSERT INTO audit VALUES(?,?,?,?,?,?)').run(randomBytes(16).toString('hex'),'operator-cli','operator.'+command,user.id,'{}',new Date().toISOString());db.exec('COMMIT');console.log(command+' completed for '+user.email);
+ }catch(e){db.exec('ROLLBACK');throw e}
+}
+db.close();

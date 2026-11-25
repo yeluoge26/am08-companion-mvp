@@ -1,0 +1,19 @@
+# Private runtime configuration and data
+.env
+.env.*
+!.env.example
+data/
+tmp/
+reference/
+node_modules/
+__pycache__/
+*.pyc
+*.log
+*.sqlite
+*.sqlite-*
+*.db
+*.pem
+*.key
+*.zip
+*.tar.gz
+.playwright-mcp/
