@@ -1,6 +1,6 @@
 import {modelConfig,generateReply,updateMemory} from './openai.mjs';
 
-export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community,safety}){
+export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community,safety,management}){
  const inFlight=new Set();
  const one=(q,...a)=>db.prepare(q).get(...a),all=(q,...a)=>db.prepare(q).all(...a),run=(q,...a)=>db.prepare(q).run(...a);
  return async function handleChat(req,res,body,conversation,user){
@@ -14,14 +14,14 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
    if(community.blocked('message',replay.message_id)||community.blocked('message',replay.assistant_id))fail(409,'Content is already under moderation');
    if(replay.content!==content||replay.conversation_id!==conversation.id)fail(409,'Idempotency conflict');
    if(replay.status==='pending')fail(409,'AI reply is still pending');
-   return json(res,200,{message:one('SELECT * FROM messages WHERE id=?',replay.message_id),assistantMessage:one('SELECT * FROM messages WHERE id=?',replay.assistant_id)||null,replyError:replay.error,access:operations.access(user.id),duplicate:true,relationship:relationships.state(user.id,conversation.character_id),modelEnabled:modelConfig().enabled});
+   return json(res,200,{message:one('SELECT * FROM messages WHERE id=?',replay.message_id),assistantMessage:one('SELECT * FROM messages WHERE id=?',replay.assistant_id)||null,replyError:replay.error,access:operations.access(user.id),duplicate:true,replyReplaced:replay.status==='blocked',relationship:relationships.state(user.id,conversation.character_id),modelEnabled:modelConfig().enabled});
   }
 
   let mid=id(),runId=id();
   transaction(()=>{
    if(inFlight.has(user.id)||one("SELECT id FROM chat_runs WHERE user_id=? AND status='pending'",user.id))fail(409,'AI reply is still pending');
    const access=operations.access(user.id);
-   if(modelConfig().enabled&&!access.allowed)fail(402,'Free message limit reached. Subscribe to continue.');
+   if(modelConfig().enabled&&!access.allowed)fail(402,config.betaMode?'Free message limit reached. Redeem an invitation code to continue.':'Free message limit reached. Subscribe to continue.');
    if(body.retryMessageId){
     if(community.blocked('message',body.retryMessageId))fail(409,'Content is already under moderation');
     const failed=one("SELECT * FROM chat_runs WHERE user_id=? AND message_id=? AND status='failed' ORDER BY rowid DESC LIMIT 1",user.id,text(body.retryMessageId,64));
@@ -37,25 +37,29 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
   inFlight.add(user.id);
   const stream=(req.headers.accept||'').includes('text/event-stream'),abort=new AbortController();
   const disconnected=()=>{if(!res.writableEnded)abort.abort()};res.on('close',disconnected);
-  let heartbeat,assistantMessage=null,replyError=null,memoryWarning=null;
+  let heartbeat,assistantMessage=null,replyError=null,memoryWarning=null,replyReplaced=false;
   const emit=(event,value)=>{if(!res.destroyed)res.write(`event: ${event}\ndata: ${JSON.stringify(value)}\n\n`)};
   if(stream){res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'});res.flushHeaders();emit('message',{message,access:operations.access(user.id)});heartbeat=setInterval(()=>{if(!res.destroyed)res.write(': heartbeat\n\n')},15000)}
   try{
-   const rawCharacter=visibleCharacter(conversation.character_id,user);const character=publicCharacter(rawCharacter);character.settings.prompt=JSON.parse(rawCharacter.settings||'{}').prompt||'';
+   const rawCharacter=visibleCharacter(conversation.character_id,user);const character=publicCharacter(rawCharacter);character.settings.prompt=management.personaPrompt(rawCharacter);const relationshipContext=relationships.context(user.id,conversation.character_id);character.settings.relationshipContext=relationshipContext.text;
    const history=all(`SELECT role,content FROM (SELECT rowid,role,content FROM messages WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM reports r JOIN moderation_decisions d ON d.report_id=r.id WHERE r.target_type='message' AND r.target_id=messages.id AND d.action='hide' AND d.active=1) ORDER BY rowid DESC LIMIT ?) ORDER BY rowid`,conversation.id,config.contextMessages);
    const accountMemory=operations.memory(user.id),memory=operations.characterMemory(user.id,conversation.character_id),useMemory=config.memoryEnabled&&accountMemory.enabled&&memory.enabled;
-   const result=await generateReply(character,history,{config,memory:useMemory?memory.summary:'',onDelta:stream?delta=>emit('delta',{delta}):undefined,signal:abort.signal});
+   let accumulated='',outputBlocked=false,result;
+   const inspect=chunk=>{accumulated+=chunk;if(safety.check(user,conversation.id,accumulated,requestKey,'output')){outputBlocked=true;abort.abort();throw Error('Output blocked')}if(stream)emit('delta',{delta:chunk})};
+   try{result=await generateReply(character,history,{config,memory:useMemory?memory.summary:'',onDelta:inspect,signal:abort.signal})}catch(e){if(!outputBlocked)throw e}
+   if(!outputBlocked&&safety.check(user,conversation.id,result.content,requestKey,'output'))outputBlocked=true;
+   if(outputBlocked){replyReplaced=true;result={content:config.outputFallback,usage:null,model:config.model};if(stream)emit('reply_replaced',{content:result.content})}
    const aid=id();
-   transaction(()=>{run('INSERT INTO messages VALUES(?,?,?,?,?)',aid,conversation.id,'assistant',result.content,now());run('UPDATE conversations SET updated=? WHERE id=?',now(),conversation.id);run("UPDATE chat_runs SET status='completed',assistant_id=?,usage=?,completed=? WHERE id=?",aid,JSON.stringify(result.usage),now(),runId);relationships.award(user.id,conversation.character_id,runId);audit(user.id,'ai.reply',conversation.id,{model:result.model,usage:result.usage,stream})});
+   transaction(()=>{run('INSERT INTO messages VALUES(?,?,?,?,?)',aid,conversation.id,'assistant',result.content,now());run('UPDATE conversations SET updated=? WHERE id=?',now(),conversation.id);run("UPDATE chat_runs SET status=?,assistant_id=?,usage=?,completed=? WHERE id=?",replyReplaced?'blocked':'completed',aid,JSON.stringify(result.usage),now(),runId);if(!replyReplaced){relationships.acknowledge(user.id,conversation.character_id,relationshipContext.level);relationships.award(user.id,conversation.character_id,runId)}audit(user.id,replyReplaced?'ai.reply.blocked':'ai.reply',conversation.id,{model:result.model,usage:result.usage,stream})});
    assistantMessage=one('SELECT * FROM messages WHERE id=?',aid);
    if(stream)emit('reply',{assistantMessage,relationship:relationships.state(user.id,conversation.character_id),access:operations.access(user.id)});
-   if(useMemory){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal,onUsage:usage=>metrics.recordMemory(user.id,runId,config.model,usage)});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
+   if(useMemory&&!replyReplaced){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal,onUsage:usage=>metrics.recordMemory(user.id,runId,config.model,usage)});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
   }catch(e){
    replyError=e.message.startsWith('AI ')?e.message:'AI service is temporarily unavailable. Your message was saved.';
    run("UPDATE chat_runs SET status='failed',error=?,completed=? WHERE id=? AND status='pending'",replyError,now(),runId);
    audit(user.id,'ai.reply.failed',conversation.id,{model:config.model});
   }finally{clearInterval(heartbeat);pendingReplies.delete(conversation.id);inFlight.delete(user.id);res.off('close',disconnected)}
-  const result={message,assistantMessage,replyError,memoryWarning,relationshipMemory:operations.memoryState(user.id,conversation.character_id),relationship:relationships.state(user.id,conversation.character_id),access:operations.access(user.id),modelEnabled:true};
+  const result={message,assistantMessage,replyReplaced,replyError,memoryWarning,relationshipMemory:operations.memoryState(user.id,conversation.character_id),relationship:relationships.state(user.id,conversation.character_id),access:operations.access(user.id),modelEnabled:true};
   if(!res.destroyed){if(stream){emit(replyError?'error':'done',result);res.end()}else json(res,201,result)}
  };
 }

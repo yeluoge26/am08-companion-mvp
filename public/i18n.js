@@ -1,7 +1,62 @@
 (() => {
 'use strict';
 // Exact UI phrases only. User-authored content is explicitly marked translate="no".
-const zh = Object.fromEntries(`Staff accounts|员工账号
+const zh = Object.fromEntries(`First redemption within the selected date range; retention uses completed UTC days.|按所选日期范围内首次兑换的用户分组，以完整 UTC 日期计算留存。
+shorts|短视频
+collection|合集
+premium|订阅页
+wallet|代币与订单
+createCharacter|创建角色
+voice|语音
+image|生图
+input|输入
+output|输出
+both|输入和输出
+Beta mode|内测模式
+Prioritize reviewed personas|优先展示已审阅人设
+Feature switches|功能开关
+Safe replacement reply|安全替代回复
+Invitation codes|邀请码管理
+Generate invitation codes|批量生成邀请码
+Export CSV|导出 CSV
+Code|邀请码
+Batch|批次
+Count|数量
+Membership days|会员天数
+Maximum uses per code|每码最大使用次数
+Used / limit|已用 / 上限
+Expiry|到期时间
+Redemptions|兑换记录
+Invitation cohorts|邀请码留存
+Redeemed users|兑换人数
+Retention is measured from first redemption in each batch, using completed UTC days.|以用户在该批次首次兑换日为起点，按已结束的 UTC 日期统计留存。
+Scope|适用范围
+Direction|方向
+Input|输入
+Output|输出
+Both|输入和输出
+Input and output rules are configured separately. This is literal matching, not semantic review.|输入与输出规则分别配置；当前为文字规则匹配，不是语义审核。
+Persona review status|人设审阅状态
+Draft persona|人设草稿
+Reviewed persona|已审阅
+Refined persona|精修
+Popular in last 30 days|近 30 天热度
+30-day conversations / replies|近 30 天会话 / 回复
+Persona background|身份背景
+Persona personality|性格
+Persona speech|说话风格与口头禅
+Persona boundaries|禁区话题
+Opening greeting|角色开场白
+Relationship prompt|关系提示
+Structured persona fields take precedence over the legacy prompt when nonempty.|结构化人设非空时优先使用，否则兼容旧版整段 Prompt。
+Beta access|内测资格
+Invitation code|邀请码
+Redeem invitation|兑换邀请码
+Invitation redeemed|兑换成功，权益已生效
+Enter an invitation code to receive membership and tokens.|输入邀请码，兑换会员时长和代币。
+Please contact the operator for access.|请联系运营人员申请使用资格。
+New way of connecting unlocked|解锁了新的相处方式
+Staff accounts|员工账号
 Create staff account|创建员工账号
 Super administrator|超级管理员
 Operations|运营

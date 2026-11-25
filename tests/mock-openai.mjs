@@ -11,7 +11,7 @@ globalThis.fetch=async(url,options)=>{
  const content=payload.input.at(-1).content;
  const attempt=(attempts.get(content)||0)+1;attempts.set(content,attempt);
  if(content==='FAIL_ONCE'&&attempt===1)return Response.json({error:'secret provider detail'},{status:429});
- const answer=content==='RECALL'?(payload.instructions.includes('测试名字小林')?'记得你叫小林':'没有记忆'):'你好，流式测试完成。';
+ const answer=content==='PERSONA_CONTEXT'?payload.instructions:content==='RECALL'?(payload.instructions.includes('测试名字小林')?'记得你叫小林':'没有记忆'):'你好，流式测试完成。';
  const completed={type:'response.completed',response:{output:[{type:'message',content:[{type:'output_text',text:answer}]}],usage:{input_tokens:20,output_tokens:10}}};
  if(!payload.stream)return Response.json(completed.response);
  const encoder=new TextEncoder();

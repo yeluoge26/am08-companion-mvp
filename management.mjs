@@ -6,6 +6,8 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
  CREATE TABLE IF NOT EXISTS order_terms(order_id TEXT PRIMARY KEY REFERENCES orders(id),snapshot TEXT NOT NULL,paid_at TEXT);
  CREATE TABLE IF NOT EXISTS order_admin(order_id TEXT PRIMARY KEY REFERENCES orders(id),note TEXT NOT NULL DEFAULT '',dispute TEXT NOT NULL DEFAULT 'none',reference TEXT NOT NULL DEFAULT '',version INTEGER NOT NULL DEFAULT 1);
  CREATE TABLE IF NOT EXISTS refunds(order_id TEXT PRIMARY KEY REFERENCES orders(id),reference TEXT UNIQUE NOT NULL,reason TEXT NOT NULL,actor TEXT NOT NULL,created TEXT NOT NULL);`);
+ for(const [column,definition] of [['persona_status',"TEXT NOT NULL DEFAULT 'draft'"],['greeting',"TEXT NOT NULL DEFAULT ''"],['persona_fields',"TEXT NOT NULL DEFAULT '{}'"]])if(!all('PRAGMA table_info(character_admin)').some(c=>c.name===column))db.exec('ALTER TABLE character_admin ADD COLUMN '+column+' '+definition);
+ function personaPrompt(c){const fields=JSON.parse(one('SELECT persona_fields FROM character_admin WHERE character_id=?',c.id)?.persona_fields||'{}');const parts=Object.entries(fields).filter(([,v])=>v).map(([k,v])=>k+': '+v);return parts.length?parts.join('\n'):JSON.parse(c.settings||'{}').prompt||''}
  transaction(()=>{
   for(const p of seeds)run('INSERT OR IGNORE INTO product_plans VALUES(?,?,1)',p.id,JSON.stringify({...p,kind:'subscription',cycleUnit:'month',cycleCount:p.months,originalAmount:p.amount,active:true,recommended:p.id==='annual',benefits:'Unlimited text chat\nPrivate characters',region:'GLOBAL'}));
   // Historical orders must retain the originally coded entitlement, not the current editable price.
@@ -29,7 +31,8 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
  }
  function rebuildMembership(uid){
   const paid=all("SELECT o.plan,t.snapshot,t.paid_at FROM orders o JOIN order_terms t ON t.order_id=o.id WHERE o.user_id=? AND o.status='paid' ORDER BY t.paid_at,o.rowid",uid).filter(o=>JSON.parse(o.snapshot).kind==='subscription');
-  let end=0,last=null;for(const o of paid){end=Date.parse(endDate(Math.max(end,Date.parse(o.paid_at)),JSON.parse(o.snapshot)));last=o}
+  const invites=one("SELECT name FROM sqlite_master WHERE name='invite_redemptions'")?all('SELECT days,created FROM invite_redemptions WHERE user_id=?',uid).map(r=>({plan:'beta',paid_at:r.created,days:r.days})):[];
+  let end=0,last=null;for(const o of [...paid,...invites].sort((a,b)=>a.paid_at.localeCompare(b.paid_at))){const start=Math.max(end,Date.parse(o.paid_at));end=o.days?start+o.days*86400000:Date.parse(endDate(start,JSON.parse(o.snapshot)));last=o}
   const old=one('SELECT status FROM subscriptions WHERE user_id=?',uid);
   if(!last)run("UPDATE subscriptions SET status='revoked',expires=? WHERE user_id=?",now(),uid);
   else run('UPDATE subscriptions SET plan=?,expires=?,status=? WHERE user_id=?',last.plan,new Date(end).toISOString(),old?.status==='non-renewing'?'non-renewing':'active',uid);
@@ -39,7 +42,7 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
  function pageRows(url,base,params=[]){const page=Math.max(1,Math.min(100000,Math.floor(Number(url.searchParams.get('page')))||1)),size=25;const total=one(`SELECT COUNT(*) n FROM (${base})`,...params).n;return {rows:all(base+' LIMIT ? OFFSET ?',...params,size,(page-1)*size),total,page,pages:Math.max(1,Math.ceil(total/size))}}
  const checkVersion=(given,current)=>{if(given!==current)fail(409,'Record changed. Reload and try again.')};
  const reason=b=>text(b.reason,500);
- function characterInfo(c){return {...c,settings:JSON.parse(c.settings||'{}'),...(one('SELECT * FROM character_admin WHERE character_id=?',c.id)||{status:'published',rank:0,tags:'',seo_title:'',seo_description:'',version:1})}}
+ function characterInfo(c){return {...c,settings:JSON.parse(c.settings||'{}'),...(one('SELECT * FROM character_admin WHERE character_id=?',c.id)||{status:'published',rank:0,tags:'',seo_title:'',seo_description:'',version:1,persona_status:'draft',greeting:'',persona_fields:'{}'})}}
  function getOrder(oid){const o=one('SELECT orders.*,users.email FROM orders JOIN users ON users.id=orders.user_id WHERE orders.id=?',oid);if(!o)fail(404,'Order not found');return {...o,terms:snapshot(oid),...(one('SELECT * FROM order_admin WHERE order_id=?',oid)||{note:'',dispute:'none',reference:'',version:1}),paidAt:one('SELECT paid_at FROM order_terms WHERE order_id=?',oid)?.paid_at,refund:one('SELECT * FROM refunds WHERE order_id=?',oid)||null,ledger:all('SELECT id,delta,reason,created FROM ledger WHERE external_key IN (?,?)',`order:${oid}`,`refund:${oid}`)}}
  async function handle(req,res,url,user,body){
   const route=url.pathname,method=req.method,q=(url.searchParams.get('q')||'').slice(0,200),status=url.searchParams.get('status')||'';
@@ -53,12 +56,16 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
    if(method==='PATCH'&&!um[2]){const why=reason(body);if(!['active','suspended'].includes(body.status))fail(400,'Invalid account status');if(u.role==='admin'&&body.status!=='active')fail(409,'Administrator accounts cannot be suspended');const name=text(body.name,60),note=text(body.note||'',1000,false);transaction(()=>{checkVersion(body.version,userState(uid).version);run('INSERT OR IGNORE INTO user_admin(user_id) VALUES(?)',uid);run('UPDATE users SET name=? WHERE id=?',name,uid);run('UPDATE user_admin SET status=?,note=?,version=version+1 WHERE user_id=?',body.status,note,uid);if(body.status==='suspended')run('DELETE FROM sessions WHERE user_id=?',uid);audit(user.id,'user.updated',uid,{status:body.status,reason:why})});return json(res,200,{ok:true}),true}
   }
   if(route==='/api/admin/characters'&&method==='GET'){
-   const list=pageRows(url,"SELECT c.* FROM characters c LEFT JOIN character_admin a ON a.character_id=c.id WHERE c.owner_id IS NULL AND c.name LIKE ? AND (?='' OR COALESCE(a.status,'published')=?) ORDER BY COALESCE(a.rank,0) DESC,c.created DESC",['%'+q+'%',status,status]);return json(res,200,{...list,rows:undefined,characters:list.rows.map(characterInfo),images:catalog.map(c=>({image:c.image,name:c.name}))}),true;
+   const personaStatus=url.searchParams.get('persona_status')||'',popular=url.searchParams.get('sort')==='popular';if(!['','draft','reviewed','refined'].includes(personaStatus))fail(400,'Invalid persona status');
+   const since=new Date(Date.parse(now())-30*86400000).toISOString();
+   const list=pageRows(url,"SELECT c.*,(SELECT COUNT(*) FROM conversations v WHERE v.character_id=c.id AND v.created>=?) conversations30,(SELECT COUNT(*) FROM chat_runs r JOIN conversations v ON v.id=r.conversation_id WHERE v.character_id=c.id AND r.status='completed' AND r.created>=?) replies30 FROM characters c LEFT JOIN character_admin a ON a.character_id=c.id WHERE c.owner_id IS NULL AND c.name LIKE ? AND (?='' OR COALESCE(a.status,'published')=?) AND (?='' OR COALESCE(a.persona_status,'draft')=?) ORDER BY "+(popular?'replies30 DESC,conversations30 DESC,':'')+"COALESCE(a.rank,0) DESC,c.created DESC,c.id",[since,since,'%'+q+'%',status,status,personaStatus,personaStatus]);return json(res,200,{...list,rows:undefined,characters:list.rows.map(characterInfo),images:catalog.map(c=>({image:c.image,name:c.name}))}),true;
+
   }
   const cm=route.match(/^\/api\/admin\/characters(?:\/([^/]+))?$/);
   if(cm&&['POST','PUT'].includes(method)){
    const previous=cm[1]?one('SELECT * FROM characters WHERE id=? AND owner_id IS NULL',cm[1]):null;if(cm[1]&&!previous)fail(404,'Official character not found');
    if(!cm[1]&&method!=='POST'||cm[1]&&method!=='PUT')fail(405,'Method not allowed');
+   const oldInfo=previous?characterInfo(previous):{};const personaStatus=body.persona_status??oldInfo.persona_status??'draft',greeting=text(body.greeting??oldInfo.greeting??'',1000,false),personaFields=body.persona_fields??JSON.parse(oldInfo.persona_fields||'{}');if(!['draft','reviewed','refined'].includes(personaStatus)||!personaFields||typeof personaFields!=='object'||Array.isArray(personaFields)||Object.keys(personaFields).some(k=>!['background','personality','speech','boundaries'].includes(k)||typeof personaFields[k]!=='string'||personaFields[k].length>600))fail(400,'Invalid persona fields');
    const name=text(body.name,60),description=text(body.description||'',1000,false),prompt=text(body.prompt||'',3000,false),personality=text(body.personality||'Friendly',100),why=reason(body);
    if(!Number.isInteger(body.age)||body.age<18||body.age>100||!['female','male'].includes(body.gender)||!['Realistic','Anime'].includes(body.style)||!['draft','published','archived'].includes(body.status)||!Number.isInteger(body.rank)||Math.abs(body.rank)>10000)fail(400,'Invalid character fields');
    if(!catalog.some(c=>c.image===body.image))fail(400,'Choose an existing library image');
@@ -66,7 +73,7 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
    transaction(()=>{if(previous)checkVersion(body.version,characterInfo(previous).version);const settings=JSON.stringify({...JSON.parse(previous?.settings||'{}'),personality,prompt,ageKnown:true});
     if(previous)run('UPDATE characters SET name=?,age=?,style=?,gender=?,description=?,image=?,settings=? WHERE id=?',name,body.age,body.style,body.gender,description,body.image,settings,cid);
     else run('INSERT INTO characters VALUES(?,NULL,?,?,?,?,?,?,NULL,NULL,?,?)',cid,name,body.age,body.style,body.gender,description,body.image,settings,now());
-    run('INSERT INTO character_admin(character_id,status,rank,tags,seo_title,seo_description) VALUES(?,?,?,?,?,?) ON CONFLICT(character_id) DO UPDATE SET status=excluded.status,rank=excluded.rank,tags=excluded.tags,seo_title=excluded.seo_title,seo_description=excluded.seo_description,version=character_admin.version+1',cid,body.status,body.rank,tags,seoTitle,seoDescription);audit(user.id,previous?'character.updated':'character.created',cid,{status:body.status,reason:why});
+    run('INSERT INTO character_admin(character_id,status,rank,tags,seo_title,seo_description) VALUES(?,?,?,?,?,?) ON CONFLICT(character_id) DO UPDATE SET status=excluded.status,rank=excluded.rank,tags=excluded.tags,seo_title=excluded.seo_title,seo_description=excluded.seo_description,version=character_admin.version+1',cid,body.status,body.rank,tags,seoTitle,seoDescription);run('UPDATE character_admin SET persona_status=?,greeting=?,persona_fields=? WHERE character_id=?',personaStatus,greeting,JSON.stringify(personaFields),cid);audit(user.id,previous?'character.updated':'character.created',cid,{status:body.status,reason:why,personaStatus,greetingChanged:greeting!==oldInfo.greeting,personaFieldsChanged:JSON.stringify(personaFields)!==oldInfo.persona_fields});
    });return json(res,previous?200:201,{character:characterInfo(one('SELECT * FROM characters WHERE id=?',cid))}),true;
   }
   if(route==='/api/admin/plans'&&method==='GET')return json(res,200,{plans:plans(true)}),true;
@@ -101,5 +108,5 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
   }
   return false;
  }
- return {handle,plans,plan,snapshot,saveSnapshot,grant,userState,published,characterInfo};
+ return {personaPrompt,handle,plans,plan,snapshot,saveSnapshot,grant,userState,published,characterInfo};
 }

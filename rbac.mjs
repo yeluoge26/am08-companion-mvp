@@ -1,11 +1,12 @@
 export const STAFF_ROLES={
  superadmin:['*'],
- operations:['safety.read','safety.write','metrics.read','users.read','users.write','users.sessions','characters.read','characters.write','plans.read','pricing.read','growth.read','growth.write','config.read','config.write'],
+ operations:['invites.read','invites.write','safety.read','safety.write','metrics.read','users.read','users.write','users.sessions','characters.read','characters.write','plans.read','pricing.read','growth.read','growth.write','config.read','config.write'],
  reviewer:['safety.read','reports.read','reports.write','appeals.read','appeals.write'],
  finance:['metrics.read','users.read','plans.read','plans.write','pricing.read','pricing.write','orders.read','orders.note','orders.cancel','orders.finance','credits.write'],
  support:['users.read','users.sessions','orders.read','orders.note','orders.cancel']
 };
 const ROUTES=[
+ ['GET',/^\/api\/admin\/invite-codes(?:\/(?:export|cohorts|[^/]+\/redemptions))?$/,'invites.read'],['POST',/^\/api\/admin\/invite-codes$/,'invites.write'],['PATCH',/^\/api\/admin\/invite-codes\/[^/]+$/,'invites.write'],
  ['POST',/^\/api\/admin\/safety\/test$/,'safety.read'],['POST',/^\/api\/admin\/safety\/import$/,'safety.write'],
  ['GET',/^\/api\/admin\/safety\/(?:config|rules|hits|baseline|advanced-baseline|export)$/,'safety.read'],['PUT',/^\/api\/admin\/safety\/config$/,'safety.write'],['POST',/^\/api\/admin\/safety\/rules$/,'safety.write'],['PUT',/^\/api\/admin\/safety\/rules\/[^/]+$/,'safety.write'],
  ['GET',/^\/api\/admin\/appeals$/,'appeals.read'],['POST',/^\/api\/admin\/appeals\/[^/]+\/resolve$/,'appeals.write'],
