@@ -113,6 +113,35 @@ Safety rule not found|安全规则不存在
 Safety rule limit reached|安全规则已达 1000 条上限，请编辑已有规则
 This safety rule already exists|相同安全规则已存在
 Only enabled rules block messages. An empty rule list blocks nothing.|仅启用的规则会拦截消息；未配置规则时不会拦截。
+Test rules|规则试测
+Test messages|测试消息
+Run test|开始测试
+Load normal chat samples|加载正常陪伴样例
+Tested|已测试
+Blocked|已拦截
+Allowed|通过
+Result|结果
+Import rules|批量导入
+Export rules|导出规则
+Load baseline rules|加载基础规则
+Rules exported|规则已导出
+Import completed|导入完成
+Rules JSON|规则 JSON
+JSON file|JSON 文件
+Preview import|预览导入
+Apply import|执行导入
+New rules|新增规则
+Skipped duplicates|跳过重复
+Conflicting rows|冲突行号
+Preview the import again|请重新预览导入
+Rules changed. Preview the import again.|规则已变更，请重新预览导入。
+Import conflicts with existing rules|导入内容与已有规则冲突
+Invalid import file|导入文件格式无效
+Import preview flag is required|缺少导入预览标记
+Import file exceeds 1 MB|导入文件超过 1 MB
+Provide 1 to 100 test messages|请输入 1 至 100 条测试消息
+One message per line, up to 100. Tests use current rules and switches without saving messages or hit records.|每行一条消息，最多 100 条。按当前规则和开关试测，不保存消息或命中记录。
+JSON import adds new rules only. Existing rules are never overwritten. Preview first; any conflict or invalid row prevents all writes.|JSON 导入仅新增规则，不覆盖已有规则。先预览；任何冲突或无效行都会阻止整批写入。
 Home|首页
 Discover|发现
 Shorts|短视频

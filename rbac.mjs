@@ -6,7 +6,8 @@ export const STAFF_ROLES={
  support:['users.read','users.sessions','orders.read','orders.note','orders.cancel']
 };
 const ROUTES=[
- ['GET',/^\/api\/admin\/safety\/(?:config|rules|hits)$/,'safety.read'],['PUT',/^\/api\/admin\/safety\/config$/,'safety.write'],['POST',/^\/api\/admin\/safety\/rules$/,'safety.write'],['PUT',/^\/api\/admin\/safety\/rules\/[^/]+$/,'safety.write'],
+ ['POST',/^\/api\/admin\/safety\/test$/,'safety.read'],['POST',/^\/api\/admin\/safety\/import$/,'safety.write'],
+ ['GET',/^\/api\/admin\/safety\/(?:config|rules|hits|baseline|export)$/,'safety.read'],['PUT',/^\/api\/admin\/safety\/config$/,'safety.write'],['POST',/^\/api\/admin\/safety\/rules$/,'safety.write'],['PUT',/^\/api\/admin\/safety\/rules\/[^/]+$/,'safety.write'],
  ['GET',/^\/api\/admin\/appeals$/,'appeals.read'],['POST',/^\/api\/admin\/appeals\/[^/]+\/resolve$/,'appeals.write'],
  ['GET',/^\/api\/admin\/metrics$/,'metrics.read'],['GET',/^\/api\/admin\/summary$/,'summary.read'],
  ['GET',/^\/api\/admin\/users(?:\/[^/]+)?$/,'users.read'],['PATCH',/^\/api\/admin\/users\/[^/]+$/,'users.write'],['POST',/^\/api\/admin\/users\/[^/]+\/sessions$/,'users.sessions'],
