@@ -39,19 +39,19 @@ export function createChatHandler({db,operations,transaction,audit,fail,now,id,t
   try{
    const rawCharacter=visibleCharacter(conversation.character_id,user);const character=publicCharacter(rawCharacter);character.settings.prompt=JSON.parse(rawCharacter.settings||'{}').prompt||'';
    const history=all('SELECT role,content FROM (SELECT rowid,role,content FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?) ORDER BY rowid',conversation.id,config.contextMessages);
-   const memory=operations.memory(user.id),useMemory=config.memoryEnabled&&memory.enabled;
+   const accountMemory=operations.memory(user.id),memory=operations.characterMemory(user.id,conversation.character_id),useMemory=config.memoryEnabled&&accountMemory.enabled&&memory.enabled;
    const result=await generateReply(character,history,{config,memory:useMemory?memory.summary:'',onDelta:stream?delta=>emit('delta',{delta}):undefined,signal:abort.signal});
    const aid=id();
    transaction(()=>{run('INSERT INTO messages VALUES(?,?,?,?,?)',aid,conversation.id,'assistant',result.content,now());run('UPDATE conversations SET updated=? WHERE id=?',now(),conversation.id);run("UPDATE chat_runs SET status='completed',assistant_id=?,usage=?,completed=? WHERE id=?",aid,JSON.stringify(result.usage),now(),runId);audit(user.id,'ai.reply',conversation.id,{model:result.model,usage:result.usage,stream})});
    assistantMessage=one('SELECT * FROM messages WHERE id=?',aid);
    if(stream)emit('reply',{assistantMessage,access:operations.access(user.id)});
-   if(useMemory){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal});operations.remember(user.id,summary,memory.revision)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
+   if(useMemory){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
   }catch(e){
    replyError=e.message.startsWith('AI ')?e.message:'AI service is temporarily unavailable. Your message was saved.';
    run("UPDATE chat_runs SET status='failed',error=?,completed=? WHERE id=? AND status='pending'",replyError,now(),runId);
    audit(user.id,'ai.reply.failed',conversation.id,{model:config.model});
   }finally{clearInterval(heartbeat);pendingReplies.delete(conversation.id);inFlight.delete(user.id);res.off('close',disconnected)}
-  const result={message,assistantMessage,replyError,memoryWarning,access:operations.access(user.id),modelEnabled:true};
+  const result={message,assistantMessage,replyError,memoryWarning,relationshipMemory:operations.memoryState(user.id,conversation.character_id),access:operations.access(user.id),modelEnabled:true};
   if(!res.destroyed){if(stream){emit(replyError?'error':'done',result);res.end()}else json(res,201,result)}
  };
 }

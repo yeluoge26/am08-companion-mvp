@@ -36,19 +36,19 @@ test('operations, streaming, memory, quota and subscription lifecycle',async t=>
   const res=await send('请记住我的测试名字小林','one',{stream:true});let events=[],deltaAt,doneAt;
   for await(const e of readEvents(res.body)){events.push(e);if(e.delta&&!deltaAt){deltaAt=Date.now();assert.equal((await send('concurrent','race',{cid:c2})).status,409)}if(e.assistantMessage)doneAt=Date.now()}
   assert.ok(doneAt-deltaAt>=50);assert.ok(events.some(e=>e.delta==='你好'));assert.equal(events.at(-1).access.remaining,0);
-  assert.match((await call('/api/me/memory',{actor:a})).body.memory.summary,/测试名字小林/);
+  assert.match((await call(`/api/characters/${chars[0].id}/memory`,{actor:a})).body.memory.summary,/测试名字小林/);
  });
  await t.test('paywall, duplicate request and private memory',async()=>{
   const replay=await send('请记住我的测试名字小林','one');assert.equal(replay.body.duplicate,true);
   assert.equal((await send('blocked','blocked',{cid:c2})).status,402);
   assert.equal((await call('/api/chat/access',{actor:a})).body.used,1);
-  assert.equal((await call('/api/me/memory',{actor:b})).body.memory.summary,'');
+  assert.equal((await call(`/api/characters/${chars[0].id}/memory`,{actor:b})).body.memory.summary,'');
   assert.equal((await call(`/api/conversations/${c1}`,{actor:b})).status,404);
  });
- await t.test('memory survives restart and is injected into a different conversation',async()=>{
+ await t.test('memory survives restart but is not injected into another character',async()=>{
   await configure({freeMessageLimit:3});await stop();await start();
   assert.equal((await call('/api/admin/config',{actor:admin})).body.config.freeMessageLimit,3);
-  const r=await send('RECALL','recall',{cid:c2});assert.equal(r.body.assistantMessage.content,'记得你叫小林');
+  assert.match((await call(`/api/characters/${chars[0].id}/memory`,{actor:a})).body.memory.summary,/测试名字小林/);const r=await send('RECALL','recall',{cid:c2});assert.equal(r.body.assistantMessage.content,'没有记忆');
  });
  await t.test('provider failures do not consume quota; retry reuses saved user message',async()=>{
   const failed=await send('FAIL_ONCE','failure');assert.match(failed.body.replyError,/quota/);
@@ -72,12 +72,53 @@ test('operations, streaming, memory, quota and subscription lifecycle',async t=>
   assert.equal((await send('expired','expired')).status,402);
  });
  await t.test('memory edit, opt out, deletion and stale write protection',async()=>{
-  let m=(await call('/api/me/memory',{actor:a})).body.memory;
-  const r=await call('/api/me/memory',{actor:a,method:'PATCH',body:{summary:'',enabled:false,revision:m.revision}});assert.equal(r.status,200);
-  assert.equal((await call('/api/me/memory',{actor:a,method:'PATCH',body:{summary:'stale',enabled:true,revision:m.revision}})).status,409);
+  let m=(await call(`/api/characters/${chars[0].id}/memory`,{actor:a})).body.memory;
+  const r=await call(`/api/characters/${chars[0].id}/memory`,{actor:a,method:'PATCH',body:{summary:'',enabled:false,revision:m.revision}});assert.equal(r.status,200);
+  assert.equal((await call(`/api/characters/${chars[0].id}/memory`,{actor:a,method:'PATCH',body:{summary:'stale',enabled:true,revision:m.revision}})).status,409);
   await configure({quotaEnabled:false});
   assert.equal((await send('RECALL','no-memory',{cid:c2})).body.assistantMessage.content,'没有记忆');
-  assert.equal((await call('/api/me/memory',{actor:a})).body.memory.summary,'');
+  assert.equal((await call(`/api/characters/${chars[0].id}/memory`,{actor:a})).body.memory.summary,'');
+ });
+ await t.test('character memory persists across new conversations, isolates accounts and preserves legacy archive',async()=>{
+  const route=`/api/characters/${chars[2].id}/memory`;
+  let m=(await call(route,{actor:a})).body.memory;
+  assert.equal((await call(route,{actor:a,method:'PATCH',body:{summary:'测试名字小林',enabled:true,revision:m.revision}})).status,200);
+  const first=(await call('/api/conversations',{actor:a,body:{characterId:chars[2].id}})).body.conversation.id;
+  assert.equal((await send('RECALL','own-memory',{cid:first})).body.assistantMessage.content,'记得你叫小林');
+  assert.equal((await call('/api/conversations/'+first,{actor:a,method:'DELETE',body:{}})).status,200);
+  const second=(await call('/api/conversations',{actor:a,body:{characterId:chars[2].id}})).body.conversation.id;assert.notEqual(first,second);
+  assert.equal((await send('RECALL','new-conversation-memory',{cid:second})).body.assistantMessage.content,'记得你叫小林');
+  assert.equal((await call(route,{actor:b})).body.memory.summary,'');
+  let old=(await call('/api/me/memory',{actor:a})).body.memory;
+  await call('/api/me/memory',{actor:a,method:'PATCH',body:{summary:'测试名字小林 legacy private data',enabled:true,revision:old.revision}});
+  assert.equal((await send('RECALL','legacy-is-not-injected',{cid:c2})).body.assistantMessage.content,'没有记忆');
+  const privateChar=(await call('/api/characters',{actor:a,body:{name:'Private memory',age:25,style:'Realistic',gender:'female',image:chars[0].image,personality:'Friendly',description:''}})).body.character;
+  assert.equal((await call(`/api/characters/${privateChar.id}/memory`,{actor:b})).status,404);
+  const exported=(await call('/api/me/export',{actor:a})).body;assert.ok(exported.relationshipMemories.some(x=>x.character_id===chars[2].id));
+  m=(await call(route,{actor:a})).body.memory;assert.equal((await call(route,{actor:a,method:'DELETE',body:{revision:m.revision}})).status,200);assert.equal((await call(route,{actor:a,method:'DELETE',body:{revision:m.revision}})).status,409);
+  assert.equal((await call(route,{actor:a})).body.memory.summary,'');
+ });
+ await t.test('clearing a card during extraction prevents stale automatic memory from returning',async()=>{
+  const route=`/api/characters/${chars[1].id}/memory`;
+  const response=await send('测试名字小林 SLOW_MEMORY','memory-race',{cid:c2,stream:true});let cleared=false;
+  for await(const e of readEvents(response.body)){if(e.assistantMessage&&!cleared){const m=(await call(route,{actor:a})).body.memory;assert.equal((await call(route,{actor:a,method:'DELETE',body:{revision:m.revision}})).status,200);cleared=true;}}
+  assert.equal(cleared,true);assert.equal((await call(route,{actor:a})).body.memory.summary,'');
+  const m=(await call(route,{actor:a})).body.memory;
+  await call(route,{actor:a,method:'PATCH',body:{summary:'测试名字小林',enabled:false,revision:m.revision}});
+  assert.equal((await send('RECALL','disabled-character',{cid:c2})).body.assistantMessage.content,'没有记忆');
+  await stop();await start();assert.equal((await call(route,{actor:a})).body.memory.enabled,false);
+ });
+ await t.test('account and operator memory switches stop recall and learning',async()=>{
+  const route=`/api/characters/${chars[1].id}/memory`;let m=(await call(route,{actor:a})).body.memory;
+  await call(route,{actor:a,method:'PATCH',body:{summary:'测试名字小林',enabled:true,revision:m.revision}});
+  let account=(await call('/api/me/memory',{actor:a})).body.memory;
+  await call('/api/me/memory',{actor:a,method:'PATCH',body:{...account,enabled:false}});
+  const before=(await call(route,{actor:a})).body.memory;
+  assert.equal((await send('RECALL','account-switch-off',{cid:c2})).body.assistantMessage.content,'没有记忆');assert.equal((await call(route,{actor:a})).body.memory.revision,before.revision);
+  account=(await call('/api/me/memory',{actor:a})).body.memory;await call('/api/me/memory',{actor:a,method:'PATCH',body:{...account,enabled:true}});
+  await configure({memoryEnabled:false});assert.equal((await send('RECALL','operator-memory-off',{cid:c2})).body.assistantMessage.content,'没有记忆');
+  assert.equal((await call(route,{actor:a})).body.memory.revision,before.revision);await configure({memoryEnabled:true});
+  assert.equal((await send('RECALL','memory-restored',{cid:c2})).body.assistantMessage.content,'记得你叫小林');
  });
  await t.test('interrupted stream is failed, never stored as a completed reply, and remains retryable',async()=>{
   const before=(await call('/api/admin/config',{actor:admin})).body.stats;

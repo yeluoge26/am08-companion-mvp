@@ -4,7 +4,7 @@ globalThis.fetch=async(url,options)=>{
  if(String(url)!=='https://api.openai.com/v1/responses')return realFetch(url,options);
  const payload=JSON.parse(options.body);
  if(payload.text?.format?.name==='user_memory'){
-  const input=JSON.parse(payload.input);
+  const input=JSON.parse(payload.input);if(input.userMessage.includes('SLOW_MEMORY'))await new Promise(r=>setTimeout(r,250));
   const summary=input.userMessage.includes('测试名字')?input.userMessage:input.previousMemory;
   return Response.json({output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({summary})}]}]});
  }
