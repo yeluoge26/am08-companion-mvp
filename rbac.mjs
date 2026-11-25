@@ -1,11 +1,12 @@
 export const STAFF_ROLES={
  superadmin:['*'],
  operations:['metrics.read','users.read','users.write','users.sessions','characters.read','characters.write','plans.read','pricing.read','growth.read','growth.write','config.read','config.write'],
- reviewer:['reports.read','reports.write'],
+ reviewer:['reports.read','reports.write','appeals.read','appeals.write'],
  finance:['metrics.read','users.read','plans.read','plans.write','pricing.read','pricing.write','orders.read','orders.note','orders.cancel','orders.finance','credits.write'],
  support:['users.read','users.sessions','orders.read','orders.note','orders.cancel']
 };
 const ROUTES=[
+ ['GET',/^\/api\/admin\/appeals$/,'appeals.read'],['POST',/^\/api\/admin\/appeals\/[^/]+\/resolve$/,'appeals.write'],
  ['GET',/^\/api\/admin\/metrics$/,'metrics.read'],['GET',/^\/api\/admin\/summary$/,'summary.read'],
  ['GET',/^\/api\/admin\/users(?:\/[^/]+)?$/,'users.read'],['PATCH',/^\/api\/admin\/users\/[^/]+$/,'users.write'],['POST',/^\/api\/admin\/users\/[^/]+\/sessions$/,'users.sessions'],
  ['GET',/^\/api\/admin\/characters$/,'characters.read'],['POST',/^\/api\/admin\/characters$/,'characters.write'],['PUT',/^\/api\/admin\/characters\/[^/]+$/,'characters.write'],

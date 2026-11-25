@@ -1,6 +1,6 @@
 import {modelConfig,generateReply,updateMemory} from './openai.mjs';
 
-export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies}){
+export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community}){
  const inFlight=new Set();
  const one=(q,...a)=>db.prepare(q).get(...a),all=(q,...a)=>db.prepare(q).all(...a),run=(q,...a)=>db.prepare(q).run(...a);
  return async function handleChat(req,res,body,conversation,user){
@@ -9,6 +9,7 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
   const content=text(body.content,4000),requestKey=text(req.headers['idempotency-key']||id(),100);
   const replay=one('SELECT * FROM chat_runs WHERE user_id=? AND request_key=?',user.id,requestKey);
   if(replay){
+   if(community.blocked('message',replay.message_id)||community.blocked('message',replay.assistant_id))fail(409,'Content is already under moderation');
    if(replay.content!==content||replay.conversation_id!==conversation.id)fail(409,'Idempotency conflict');
    if(replay.status==='pending')fail(409,'AI reply is still pending');
    return json(res,200,{message:one('SELECT * FROM messages WHERE id=?',replay.message_id),assistantMessage:one('SELECT * FROM messages WHERE id=?',replay.assistant_id)||null,replyError:replay.error,access:operations.access(user.id),duplicate:true,relationship:relationships.state(user.id,conversation.character_id),modelEnabled:modelConfig().enabled});
@@ -20,6 +21,7 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
    const access=operations.access(user.id);
    if(modelConfig().enabled&&!access.allowed)fail(402,'Free message limit reached. Subscribe to continue.');
    if(body.retryMessageId){
+    if(community.blocked('message',body.retryMessageId))fail(409,'Content is already under moderation');
     const failed=one("SELECT * FROM chat_runs WHERE user_id=? AND message_id=? AND status='failed' ORDER BY rowid DESC LIMIT 1",user.id,text(body.retryMessageId,64));
     if(!failed||failed.content!==content||failed.conversation_id!==conversation.id||one("SELECT id FROM chat_runs WHERE message_id=? AND status='completed'",failed.message_id))fail(409,'This message cannot be retried');
     mid=failed.message_id;
@@ -38,7 +40,7 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
   if(stream){res.writeHead(200,{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'});res.flushHeaders();emit('message',{message,access:operations.access(user.id)});heartbeat=setInterval(()=>{if(!res.destroyed)res.write(': heartbeat\n\n')},15000)}
   try{
    const rawCharacter=visibleCharacter(conversation.character_id,user);const character=publicCharacter(rawCharacter);character.settings.prompt=JSON.parse(rawCharacter.settings||'{}').prompt||'';
-   const history=all('SELECT role,content FROM (SELECT rowid,role,content FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?) ORDER BY rowid',conversation.id,config.contextMessages);
+   const history=all(`SELECT role,content FROM (SELECT rowid,role,content FROM messages WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM reports r JOIN moderation_decisions d ON d.report_id=r.id WHERE r.target_type='message' AND r.target_id=messages.id AND d.action='hide' AND d.active=1) ORDER BY rowid DESC LIMIT ?) ORDER BY rowid`,conversation.id,config.contextMessages);
    const accountMemory=operations.memory(user.id),memory=operations.characterMemory(user.id,conversation.character_id),useMemory=config.memoryEnabled&&accountMemory.enabled&&memory.enabled;
    const result=await generateReply(character,history,{config,memory:useMemory?memory.summary:'',onDelta:stream?delta=>emit('delta',{delta}):undefined,signal:abort.signal});
    const aid=id();

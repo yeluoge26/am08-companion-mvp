@@ -26,6 +26,52 @@ At least one active super administrator is required|必须保留至少一名可�
 Use staff management for employee accounts|请在员工账号页面管理此账号
 Latest 200 requests. Request bodies and passwords are never recorded.|最近 200 条请求，不记录请求正文和密码。
 Up to 100 matching accounts. Search by name or email.|最多显示 100 个匹配账号，可按姓名或邮箱搜索。
+Review queue|审核队列
+User appeals|用户申诉
+Reports and appeals|举报与申诉
+Review appeal|审核申诉
+Submit appeal|提交申诉
+Appeal reason|申诉理由
+Appeal submitted|申诉已提交
+Your appeal|我的申诉
+Waiting for review|等待审核
+Review history|审核记录
+Original decision|原处理结论
+Content action|内容处置
+Content action:|内容处置：
+No restriction|不限制内容
+Warn author|警告作者
+Hide message|隐藏消息
+Take character offline|角色下架
+Withdrawn|已撤销
+All categories|所有类型
+Message|消息
+Character|角色
+upheld|维持原判
+overturned|改判
+superseded|原决定已变更
+none|无处置
+warn|警告
+hide|隐藏
+reported|已举报
+decided|已审核
+appealed|已申诉
+appeal-reviewed|申诉已审核
+Content unavailable|内容不可用
+[Content removed after review]|[内容经审核已隐藏]
+Content removed after review|内容经审核已隐藏
+Only reported excerpts are available. No access to full conversations.|仅展示举报片段，不能访问完整聊天。
+Latest 100 reports and content decisions affecting your account. One appeal per person per report.|显示最近 100 条与您相关的举报和处置，每人每条举报可申诉一次。
+Hiding a message also clears this character’s learned memory. Appeals do not restore cleared memory.|隐藏消息会同时清空该角色已学习的记忆；申诉改判不会恢复已清空的记忆。
+Overturning withdraws this restriction, or reopens a dismissed report. Other active restrictions remain.|改判会撤销本次限制，或重新开启已驳回的举报；其他有效限制不受影响。
+Content is already under moderation|该内容已被处置
+Invalid moderation decision|审核状态或处置组合无效，驳回举报时应选择不限制内容
+This content has no user author|该内容没有用户作者，不能发送作者警告
+Content no longer exists|内容已不存在
+Wait for the review decision|请等待审核结论后再申诉
+An appeal has already been submitted|您已提交过申诉
+Another reviewer must handle this appeal|请由其他审核员处理该申诉，或由超管复核
+Appeal not found|申诉不存在
 Home|首页
 Discover|发现
 Shorts|短视频
