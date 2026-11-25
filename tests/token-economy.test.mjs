@@ -1,0 +1,27 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {randomUUID} from 'node:crypto';
+import {createTokenEconomy} from '../token-economy.mjs';
+test('token holds preserve balances, enforce limits and settle exactly once',()=>{
+ const db=new DatabaseSync(':memory:');db.exec(`PRAGMA foreign_keys=ON; CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users VALUES('u'); CREATE TABLE ledger(id TEXT PRIMARY KEY,user_id TEXT,delta INTEGER,reason TEXT,external_key TEXT UNIQUE,created TEXT); INSERT INTO ledger VALUES('seed','u',20,'seed','seed','2026-01-01');`);
+ let time='2026-11-25T00:00:00.000Z';
+ const transaction=fn=>{db.exec('BEGIN IMMEDIATE');try{const r=fn();db.exec('COMMIT');return r}catch(e){db.exec('ROLLBACK');throw e}};
+ const economy=createTokenEconomy({db,transaction,fail:(status,message)=>{throw Object.assign(Error(message),{status})},id:randomUUID,now:()=>time,audit:()=>{}});
+ const error=(fn,status)=>assert.throws(fn,e=>e.status===status);
+ error(()=>economy.reserve('u','image','disabled'),503);
+ economy.saveRule({action:'image',cost:4,active:true,version:1,reason:'test'},'admin');
+ economy.saveSettings('u',{monthly_token_limit:8,version:1});
+ const h=economy.reserve('u','image','one');assert.equal(economy.balance('u').available,16);assert.equal(economy.balance('u').balance,20);
+ assert.equal(economy.reserve('u','image','one').id,h.id);error(()=>economy.reserve('u','avatar','one'),409);
+ const other=economy.reserve('u','image','two');error(()=>economy.reserve('u','image','three'),409);
+ error(()=>economy.saveSettings('u',{monthly_token_limit:7,version:2}),409);
+ economy.saveRule({action:'image',cost:7,active:true,version:2,reason:'new price'},'admin');
+ economy.capture(h.id);economy.capture(h.id);assert.equal(economy.balance('u').balance,16);assert.equal(economy.balance('u').spent,4);assert.equal(economy.balance('u').available,12);
+ economy.release(other.id);economy.release(other.id);assert.equal(economy.balance('u').available,16);error(()=>economy.capture(other.id),409);error(()=>economy.release(h.id),409);
+ economy.saveSettings('u',{monthly_token_limit:null,version:2});const expiry=economy.reserve('u','image','expiry');db.prepare('UPDATE token_holds SET expires=? WHERE id=?').run('2026-01-01',expiry.id);assert.equal(economy.balance('u').held,0);error(()=>economy.capture(expiry.id),409);
+ error(()=>economy.saveSettings('u',{monthly_token_limit:0,version:3}),409);
+ time='2026-12-01T00:00:00.000Z';economy.saveSettings('u',{monthly_token_limit:0,version:3});error(()=>economy.reserve('u','image','zero'),409);
+ economy.saveSettings('u',{monthly_token_limit:null,version:4});economy.reserve('u','image','last1');economy.reserve('u','image','last2');error(()=>economy.reserve('u','image','insufficient'),402);
+ assert.equal(db.prepare("SELECT count(*) n FROM ledger WHERE external_key LIKE 'hold:%'").get().n,1);db.close();
+},);

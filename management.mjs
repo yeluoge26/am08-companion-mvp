@@ -1,4 +1,4 @@
-export function createManagement({db,transaction,audit,fail,now,id,text,json,operations,catalog,seeds}){
+export function createManagement({db,transaction,audit,fail,now,id,text,json,operations,catalog,seeds,availableBalance}){
  const one=(q,...a)=>db.prepare(q).get(...a),all=(q,...a)=>db.prepare(q).all(...a),run=(q,...a)=>db.prepare(q).run(...a);
  db.exec(`CREATE TABLE IF NOT EXISTS user_admin(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,status TEXT NOT NULL DEFAULT 'active',note TEXT NOT NULL DEFAULT '',adult_confirmed INTEGER NOT NULL DEFAULT 0,source TEXT NOT NULL DEFAULT 'unknown',version INTEGER NOT NULL DEFAULT 1);
  CREATE TABLE IF NOT EXISTS character_admin(character_id TEXT PRIMARY KEY REFERENCES characters(id) ON DELETE CASCADE,status TEXT NOT NULL DEFAULT 'published',rank INTEGER NOT NULL DEFAULT 0,tags TEXT NOT NULL DEFAULT '',seo_title TEXT NOT NULL DEFAULT '',seo_description TEXT NOT NULL DEFAULT '',version INTEGER NOT NULL DEFAULT 1);
@@ -91,7 +91,7 @@ export function createManagement({db,transaction,audit,fail,now,id,text,json,ope
     if(om[2]==='refund'){
      const reference=text(body.reference,200);if(current.refund){if(current.refund.reference!==reference)fail(409,'Refund already recorded');return}
      if(current.status!=='paid')fail(409,'Only paid orders can be refunded');if(body.confirmExternal!==true)fail(400,'Confirm the refund was completed externally');if(one('SELECT order_id FROM refunds WHERE reference=?',reference))fail(409,'Refund reference already used');
-     const balance=one('SELECT COALESCE(SUM(delta),0) n FROM ledger WHERE user_id=?',current.user_id).n;
+     const balance=availableBalance?availableBalance(current.user_id):one('SELECT COALESCE(SUM(delta),0) n FROM ledger WHERE user_id=?',current.user_id).n;
      if(balance<current.terms.tokens)fail(409,'Insufficient tokens to reverse this order. Resolve the balance first.');
      run('INSERT INTO refunds VALUES(?,?,?,?,?)',oid,reference,why,user.id,now());run("UPDATE orders SET status='refunded' WHERE id=?",oid);run('INSERT INTO ledger VALUES(?,?,?,?,?,?)',id(),current.user_id,-current.terms.tokens,'Refund reversal',`refund:${oid}`,now());if(current.terms.kind==='subscription')rebuildMembership(current.user_id);
     }

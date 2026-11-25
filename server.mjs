@@ -8,6 +8,8 @@ import {fileURLToPath} from 'node:url';
 import {modelConfig,generateReply,updateMemory} from './openai.mjs';
 import {createOperations} from './operations.mjs';
 import {createChatHandler} from './chat-handler.mjs';
+import {createTokenEconomy} from './token-economy.mjs';
+import {createCommunity} from './community.mjs';
 import {createManagement} from './management.mjs';
 
 const scrypt=promisify(scryptCallback), ROOT=path.dirname(fileURLToPath(import.meta.url));
@@ -69,7 +71,9 @@ const assetRoot=path.resolve(process.env.ASSET_DIR||path.join(ROOT,'public/asset
 let catalog=[];const catalogPath=path.join(ROOT,'public/catalog.json');if(fs.existsSync(catalogPath))catalog=JSON.parse(fs.readFileSync(catalogPath,'utf8'));
 transaction(()=>{for(const c of catalog){run(`INSERT INTO characters(id,owner_id,name,age,style,gender,description,image,video,route,settings,created) VALUES(?,NULL,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`,String(c.id),c.name,Math.max(18,Number(c.age)||18),c.style||'Realistic',c.gender||'female',c.description||'A character from the public collection.',c.image,c.video||null,c.route||null,JSON.stringify(c.settings||{}),now())}});
 if(process.env.ADMIN_EMAIL&&process.env.ADMIN_PASSWORD){const adminEmail=email(process.env.ADMIN_EMAIL);if(!one('SELECT id FROM users WHERE email=?',adminEmail)){run('INSERT INTO users VALUES(?,?,?,?,?,?)',id(),adminEmail,'Administrator',await passwordHash(password(process.env.ADMIN_PASSWORD)),'admin',now())}}
-const management=createManagement({db,transaction,audit,fail,now,id,text,json,operations,catalog,seeds:PLANS});
+const management=createManagement({db,transaction,audit,fail,now,id,text,json,operations,catalog,seeds:PLANS,availableBalance:uid=>economy.balance(uid).available});
+const economy=createTokenEconomy({db,transaction,fail,id,now,audit});
+const community=createCommunity({db,transaction,fail,id,now,audit,text,visibleCharacter});
 // All accounts are ordinary users unless explicitly bootstrapped by the operator.
 function sessionCookie(req){return req.headers['x-admin-context']==='1'?'admin_sid':'sid'}
 function getSession(req){const cookie=sessionCookie(req)+'=';const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookie))?.slice(cookie.length);if(!token)return null;return one("SELECT sessions.*,users.email,users.name,users.role,users.created FROM sessions JOIN users ON users.id=sessions.user_id WHERE token=? AND expires>? AND NOT EXISTS(SELECT 1 FROM user_admin a WHERE a.user_id=users.id AND a.status='suspended')",hash(token),Date.now())}
@@ -121,19 +125,41 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   }
   if(route==='/api/admin/me'&&method==='GET'){if(!session)return json(res,200,{user:null,csrf:null});const {user}=authenticate(req);if(user.role!=='admin')fail(403,'Administrator access required');return json(res,200,{user,csrf:session.csrf})}
   if(route==='/api/me'&&method==='GET'){if(!session)return json(res,200,{user:null,csrf:null});const {user}=authenticate(req);return json(res,200,{user,csrf:session.csrf,balance:one('SELECT COALESCE(SUM(delta),0) AS value FROM ledger WHERE user_id=?',user.id).value,subscription:one('SELECT * FROM subscriptions WHERE user_id=?',user.id)||null,modelEnabled:modelConfig().enabled})}
+  if(route==='/api/pricing/actions'&&method==='GET')return json(res,200,{rules:economy.rules()});
+  if(route==='/api/token-packs'&&method==='GET')return json(res,200,{plans:management.plans().filter(p=>p.kind==='tokens'),billingMode:process.env.CHECKOUT_URL?'external':process.env.ALLOW_MANUAL_SETTLEMENT==='true'?'manual':'unavailable'});
   if(route==='/api/plans'&&method==='GET')return json(res,200,{plans:management.plans(),billingMode:process.env.CHECKOUT_URL?'external':process.env.ALLOW_MANUAL_SETTLEMENT==='true'?'manual':'unavailable',recurring:false});
   if(route==='/api/characters'&&method==='GET'){
     const uid=session?.user_id||'';let rows=all("SELECT c.* FROM characters c LEFT JOIN character_admin a ON a.character_id=c.id WHERE c.owner_id=? OR (c.owner_id IS NULL AND COALESCE(a.status,'published')='published') ORDER BY COALESCE(a.rank,0) DESC,c.created DESC",uid);const q=(url.searchParams.get('q')||'').toLowerCase();if(q)rows=rows.filter(c=>c.name.toLowerCase().includes(q));const category=url.searchParams.get('category');if(category==='anime')rows=rows.filter(c=>c.style==='Anime');if(category==='guys')rows=rows.filter(c=>c.gender==='male');if(category==='girls')rows=rows.filter(c=>c.gender==='female'&&c.style!=='Anime');return json(res,200,{characters:rows.map(publicCharacter)})
   }
   if(/^\/api\/characters\/[^/]+$/.test(route)&&method==='GET')return json(res,200,{character:publicCharacter(visibleCharacter(route.split('/').pop(),session?{id:session.user_id}:null))});
   const {user}=authenticate(req);
+  if(route==='/api/me/settings'&&method==='GET')return json(res,200,economy.balance(user.id));
+  if(route==='/api/me/settings'&&method==='PATCH')return json(res,200,economy.saveSettings(user.id,body));
+  if(route==='/api/reports'&&method==='POST'){limit(`reports:${user.id}`,20,3600000);return json(res,201,community.submit(user,body,req.headers['idempotency-key']||''))}
+  if(route==='/api/me'&&method==='DELETE'){
+    if(user.role==='admin')fail(403,'Administrators cannot delete themselves');
+    if(body.confirm!==true)fail(400,'Confirm account deletion');
+    limit(`delete-account:${user.id}`,5,3600000);
+    const stored=one('SELECT password FROM users WHERE id=?',user.id);
+    if(!await passwordValid(text(body.password,128),stored.password))fail(403,'Current password is incorrect');
+    transaction(()=>{
+      if(one("SELECT id FROM chat_runs WHERE user_id=? AND status='pending'",user.id)||economy.balance(user.id).held>0)fail(409,'Wait for active requests to finish');
+      for(const table of ['refunds','order_admin','order_terms'])run(`DELETE FROM ${table} WHERE order_id IN (SELECT id FROM orders WHERE user_id=?)`,user.id);
+      run('DELETE FROM reports WHERE reporter=?',user.id);
+      run('DELETE FROM audit WHERE actor=? OR target=?',user.id,user.id);
+      run('DELETE FROM users WHERE id=?',user.id);
+      audit(null,'account.deleted',null);
+    });
+    res.setHeader('Set-Cookie',`sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${production?'; Secure':''}`);
+    return json(res,200,{ok:true});
+  }
   if(route==='/api/chat/access'&&method==='GET')return json(res,200,operations.access(user.id));
   if(route==='/api/me/memory'&&method==='GET')return json(res,200,{memory:operations.memory(user.id),globalEnabled:operations.config().memoryEnabled});
   if(route==='/api/me/memory'&&method==='PATCH')return json(res,200,{memory:operations.saveMemory(user.id,body)});
   if(route==='/api/auth/logout'&&method==='POST'){run('DELETE FROM sessions WHERE token=?',session.token);res.setHeader('Set-Cookie',`${sessionCookie(req)}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${production?'; Secure':''}`);return json(res,200,{ok:true})}
   if(route==='/api/me'&&method==='PATCH'){const name=text(body.name,60);run('UPDATE users SET name=? WHERE id=?',name,user.id);return json(res,200,{user:{...user,name}})}
   if(route==='/api/auth/password'&&method==='POST'){const u=one('SELECT * FROM users WHERE id=?',user.id);if(!await passwordValid(text(body.currentPassword,128),u.password))fail(403,'Current password is incorrect');const digest=await passwordHash(password(body.password));transaction(()=>{run('UPDATE users SET password=? WHERE id=?',digest,user.id);run('DELETE FROM sessions WHERE user_id=?',user.id);audit(user.id,'password.changed',user.id)});if(management.userState(user.id).status==='suspended')fail(403,'Account suspended. Contact the operator.');const csrf=newSession(res,user);return json(res,200,{ok:true,csrf})}
-  if(route==='/api/me/export'&&method==='GET'){return json(res,200,{user,memory:operations.memory(user.id),chatAccess:operations.access(user.id),characters:all('SELECT * FROM characters WHERE owner_id=?',user.id),favorites:all('SELECT * FROM favorites WHERE user_id=?',user.id),conversations:all('SELECT * FROM conversations WHERE user_id=?',user.id),messages:all('SELECT messages.* FROM messages JOIN conversations ON conversations.id=messages.conversation_id WHERE conversations.user_id=?',user.id),orders:all('SELECT * FROM orders WHERE user_id=?',user.id),ledger:all('SELECT * FROM ledger WHERE user_id=?',user.id)})}
+  if(route==='/api/me/export'&&method==='GET'){return json(res,200,{user,spending:economy.balance(user.id),reports:all('SELECT id,target_type,target_id,reason,status,resolution,created FROM reports WHERE reporter=?',user.id),memory:operations.memory(user.id),chatAccess:operations.access(user.id),characters:all('SELECT * FROM characters WHERE owner_id=?',user.id),favorites:all('SELECT * FROM favorites WHERE user_id=?',user.id),conversations:all('SELECT * FROM conversations WHERE user_id=?',user.id),messages:all('SELECT messages.* FROM messages JOIN conversations ON conversations.id=messages.conversation_id WHERE conversations.user_id=?',user.id),orders:all('SELECT * FROM orders WHERE user_id=?',user.id),ledger:all('SELECT * FROM ledger WHERE user_id=?',user.id)})}
   if(route==='/api/characters'&&method==='POST'){
     const name=text(body.name,60),age=Number(body.age);if(!Number.isInteger(age)||age<18||age>100)fail(400,'Age must be 18–100');if(!['Realistic','Anime'].includes(body.style))fail(400,'Invalid style');if(!['female','male'].includes(body.gender))fail(400,'Invalid gender');
     const image=text(body.image,200);if(!catalog.some(c=>c.image===image))fail(400,'Choose an existing library image');if(one('SELECT COUNT(*) AS n FROM characters WHERE owner_id=?',user.id).n>=100)fail(409,'Character limit reached');const cid=id();run('INSERT INTO characters VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',cid,user.id,name,age,body.style,body.gender,text(body.description||'',1000,false),image,null,null,JSON.stringify({personality:text(body.personality||'Friendly',100),voice:text(body.voice||'Not connected',80)}),now());return json(res,201,{character:publicCharacter(one('SELECT * FROM characters WHERE id=?',cid))})
@@ -152,13 +178,19 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
     if(method==='POST'&&convMatch[2]){visibleCharacter(conversation.character_id,user);return handleChat(req,res,body,conversation,user);}
   }
   if(route==='/api/generate'&&method==='POST')fail(503,'Model API is not connected. No credits have been deducted.');
-  if(route==='/api/wallet'&&method==='GET')return json(res,200,{balance:one('SELECT COALESCE(SUM(delta),0) AS value FROM ledger WHERE user_id=?',user.id).value,ledger:all('SELECT id,delta,reason,created FROM ledger WHERE user_id=? ORDER BY rowid DESC LIMIT 100',user.id)});
+  if(route==='/api/wallet'&&method==='GET')return json(res,200,{...economy.balance(user.id),ledger:all('SELECT id,delta,reason,created FROM ledger WHERE user_id=? ORDER BY rowid DESC LIMIT 100',user.id)});
   if(route==='/api/orders'&&method==='GET')return json(res,200,{orders:all('SELECT * FROM orders WHERE user_id=? ORDER BY created DESC',user.id)});
   if(route==='/api/orders'&&method==='POST'){if(!process.env.CHECKOUT_URL&&process.env.ALLOW_MANUAL_SETTLEMENT!=='true')fail(503,'Payments are not configured.');const key=text(req.headers['idempotency-key']||'',100);const existing=one('SELECT * FROM orders WHERE user_id=? AND request_key=?',user.id,key);if(existing){if(existing.plan!==body.plan)fail(409,'Idempotency key was used for a different plan');return json(res,200,{order:existing})}const plan=management.plan(body.plan);if(!plan||!plan.active)fail(400,'Unknown plan');if(body.planVersion!==undefined&&body.planVersion!==plan.version)fail(409,'Plan changed. Reload pricing and try again.');limit(`orders:${user.id}`,10,3600000);const oid=id();transaction(()=>{run('INSERT INTO orders VALUES(?,?,?,?,?,?,?,?)',oid,user.id,plan.id,plan.amount,plan.currency,'pending',key,now());management.saveSnapshot(oid,plan)});let checkoutUrl=null;if(process.env.CHECKOUT_URL){const destination=new URL(process.env.CHECKOUT_URL);if(destination.protocol!=='https:')fail(503,'Checkout configuration requires HTTPS');destination.searchParams.set('order_id',oid);checkoutUrl=destination.href}return json(res,201,{order:one('SELECT * FROM orders WHERE id=?',oid),checkoutUrl,notice:'Order created; no payment has been collected. Credits are allocated only after verified settlement.'})}
   if(/^\/api\/orders\/[^/]+\/cancel$/.test(route)&&method==='POST'){const oid=route.split('/')[3],order=one('SELECT * FROM orders WHERE id=? AND user_id=?',oid,user.id);if(!order)fail(404,'Order not found');if(order.status!=='pending')fail(409,'Only pending orders can be cancelled');run('UPDATE orders SET status=? WHERE id=?','cancelled',oid);return json(res,200,{ok:true})}
   if(route==='/api/subscription/cancel'&&method==='POST'){run('UPDATE subscriptions SET status=? WHERE user_id=?','non-renewing',user.id);audit(user.id,'subscription.non-renewing',user.id);return json(res,200,{ok:true,notice:'This MVP does not initiate recurring charges. Existing access continues until expiry.'})}
   if(route.startsWith('/api/admin/')){
     if(user.role!=='admin')fail(403,'Administrator access required');
+    if(route==='/api/admin/pricing-rules'&&method==='GET')return json(res,200,{rules:economy.rules()});
+    if(route==='/api/admin/pricing-rules'&&method==='PUT')return json(res,200,{rules:economy.saveRule(body,user.id)});
+    if(route==='/api/admin/reports'&&method==='GET')return json(res,200,{reports:community.list()});
+    const reportRoute=route.match(/^\/api\/admin\/reports\/([^/]+)(\/resolve)?$/);
+    if(reportRoute&&method==='GET'&&!reportRoute[2]){audit(user.id,'report.viewed',reportRoute[1]);return json(res,200,{report:community.detail(reportRoute[1])})}
+    if(reportRoute&&method==='POST'&&reportRoute[2])return json(res,200,{report:community.resolve(user.id,reportRoute[1],body)});
     if(await management.handle(req,res,url,user,body))return;
     if(route==='/api/admin/config'&&method==='GET')return json(res,200,{config:operations.config(),stats:operations.stats(),providerConfigured:modelConfig().enabled});
     if(route==='/api/admin/config'&&method==='PUT')return json(res,200,{config:operations.saveConfig(body,user.id)});
@@ -166,7 +198,7 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
     if(route==='/api/admin/users'&&method==='GET')return json(res,200,{users:all('SELECT id,email,name,role,created,(SELECT COALESCE(SUM(delta),0) FROM ledger WHERE user_id=users.id) AS balance FROM users ORDER BY created DESC LIMIT 200').map(u=>({...u,chatAccess:operations.access(u.id)}))});
     if(route==='/api/admin/orders'&&method==='GET')return json(res,200,{orders:all('SELECT orders.*,users.email FROM orders JOIN users ON users.id=orders.user_id ORDER BY orders.created DESC LIMIT 200')});
     if(route==='/api/admin/audit'&&method==='GET')return json(res,200,{events:all('SELECT * FROM audit ORDER BY rowid DESC LIMIT 200')});
-    if(route==='/api/admin/credits'&&method==='POST'){const uid=text(body.userId,64),delta=Number(body.delta),reason=text(body.reason,200),key=text(req.headers['idempotency-key']||'',100);if(!Number.isSafeInteger(delta)||delta===0||Math.abs(delta)>100000)fail(400,'Invalid credit adjustment');if(!one('SELECT id FROM users WHERE id=?',uid))fail(404,'User not found');const duplicate=transaction(()=>{const old=one('SELECT * FROM ledger WHERE external_key=?',`admin:${key}`);if(old){if(old.user_id!==uid||old.delta!==delta)fail(409,'Idempotency conflict');return true}const balance=one('SELECT COALESCE(SUM(delta),0) AS value FROM ledger WHERE user_id=?',uid).value;if(balance+delta<0)fail(409,'Balance cannot be negative');run('INSERT INTO ledger VALUES(?,?,?,?,?,?)',id(),uid,delta,reason,`admin:${key}`,now());audit(user.id,'credits.adjusted',uid,{delta,reason});return false});return json(res,200,{ok:true,duplicate})}
+    if(route==='/api/admin/credits'&&method==='POST'){const uid=text(body.userId,64),delta=Number(body.delta),reason=text(body.reason,200),key=text(req.headers['idempotency-key']||'',100);if(!Number.isSafeInteger(delta)||delta===0||Math.abs(delta)>100000)fail(400,'Invalid credit adjustment');if(!one('SELECT id FROM users WHERE id=?',uid))fail(404,'User not found');const duplicate=transaction(()=>{const old=one('SELECT * FROM ledger WHERE external_key=?',`admin:${key}`);if(old){if(old.user_id!==uid||old.delta!==delta)fail(409,'Idempotency conflict');return true}const balance=economy.balance(uid).available;if(balance+delta<0)fail(409,'Balance cannot be negative');run('INSERT INTO ledger VALUES(?,?,?,?,?,?)',id(),uid,delta,reason,`admin:${key}`,now());audit(user.id,'credits.adjusted',uid,{delta,reason});return false});return json(res,200,{ok:true,duplicate})}
     if(/^\/api\/admin\/orders\/[^/]+\/settle$/.test(route)&&method==='POST'){if(process.env.ALLOW_MANUAL_SETTLEMENT!=='true')fail(403,'Manual settlement is disabled');const oid=route.split('/')[4],reason=text(body.reason,200);const changed=transaction(()=>{const order=one('SELECT * FROM orders WHERE id=?',oid);if(!order)fail(404,'Order not found');if(order.status==='cancelled')fail(409,'Order cancelled');const changed=grantOrder(order,`manual:${user.id}`);if(changed)audit(user.id,'order.manually-settled',oid,{reason});return changed});return json(res,200,{ok:true,changed})}
   }
   fail(404,'Endpoint not found');

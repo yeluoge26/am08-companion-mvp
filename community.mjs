@@ -1,0 +1,12 @@
+export function createCommunity({db,transaction,fail,id,now,audit,text,visibleCharacter}) {
+ const one=(s,...a)=>db.prepare(s).get(...a),run=(s,...a)=>db.prepare(s).run(...a);
+ db.exec(`CREATE TABLE IF NOT EXISTS reports(id TEXT PRIMARY KEY,reporter TEXT REFERENCES users(id) ON DELETE CASCADE,target_type TEXT NOT NULL,target_id TEXT NOT NULL,excerpt TEXT NOT NULL,reason TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',resolution TEXT NOT NULL DEFAULT '',version INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL,resolved TEXT,request_key TEXT NOT NULL,UNIQUE(reporter,request_key));`);
+ function submit(user,body,key){key=text(key,100);const reason=text(body.reason,1000),target=text(body.target_id,64),type=body.target_type;if(!['message','character'].includes(type))fail(400,'Invalid report target');const old=one('SELECT * FROM reports WHERE reporter=? AND request_key=?',user.id,key);if(old){if(old.target_type!==type||old.target_id!==target||old.reason!==reason)fail(409,'Idempotency conflict');return {id:old.id,status:old.status}}
+  let excerpt;if(type==='message'){const m=one('SELECT m.content FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=? AND c.user_id=?',target,user.id);if(!m)fail(404,'Message not found');excerpt=m.content.slice(0,4000)}else{const c=visibleCharacter(target,user);excerpt=[c.name,c.description].join('\n').slice(0,4000)}
+  const rid=id();run('INSERT INTO reports(id,reporter,target_type,target_id,excerpt,reason,created,request_key) VALUES(?,?,?,?,?,?,?,?)',rid,user.id,type,target,excerpt,reason,now(),key);audit(user.id,'report.created',rid,{target_type:type});return {id:rid,status:'open'};
+ }
+ function list(){return db.prepare('SELECT id,target_type,target_id,reason,status,version,created FROM reports ORDER BY created DESC LIMIT 100').all()}
+ function detail(rid){const r=one('SELECT * FROM reports WHERE id=?',rid);if(!r)fail(404,'Report not found');return r}
+ function resolve(actor,rid,body){const resolution=text(body.resolution,1000);if(!['resolved','dismissed'].includes(body.status))fail(400,'Invalid report status');return transaction(()=>{const r=detail(rid);if(r.version!==body.version)fail(409,'Record changed. Reload and try again.');if(r.status!=='open')fail(409,'Report is already closed');run('UPDATE reports SET status=?,resolution=?,version=version+1,resolved=? WHERE id=?',body.status,resolution,now(),rid);audit(actor,'report.resolved',rid,{status:body.status});return detail(rid)})}
+ return {submit,list,detail,resolve};
+}
