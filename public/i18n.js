@@ -142,6 +142,37 @@ Import file exceeds 1 MB|导入文件超过 1 MB
 Provide 1 to 100 test messages|请输入 1 至 100 条测试消息
 One message per line, up to 100. Tests use current rules and switches without saving messages or hit records.|每行一条消息，最多 100 条。按当前规则和开关试测，不保存消息或命中记录。
 JSON import adds new rules only. Existing rules are never overwritten. Preview first; any conflict or invalid row prevents all writes.|JSON 导入仅新增规则，不覆盖已有规则。先预览；任何冲突或无效行都会阻止整批写入。
+Combination rule|组合规则
+Scoped exception|限定范围例外
+combination|组合
+exception|例外
+all|全部条件组
+Load combination starter rules|加载组合基础规则
+Load expanded safe samples|加载扩展正常样例
+Load adversarial samples|加载对抗样例
+Stable rule key|固定规则标识
+Condition groups|条件组
+Term matching|组内匹配方式
+Maximum span|最大匹配跨度
+Target combination|适用组合规则
+Exact exception clauses|例外完整分句
+Applied exceptions|已应用例外
+Exception applied|例外生效
+One group per line; alternatives separated by a vertical bar. All groups must match within one clause and the maximum span.|每行一组，组内备选词用竖线分隔；所有组必须在同一分句的限定跨度内命中。
+One complete clause per line. Exceptions only suppress the selected combination in that clause, never keywords or account blacklists.|每行一个完整分句。例外仅解除该分句内指定组合的命中，不解除禁词或账号黑名单。
+Advanced rule must be valid JSON|高级规则 JSON 格式无效
+Invalid advanced rule|高级规则无效
+Rule key must use lowercase letters, digits and hyphens|规则标识只能用小写字母、数字和连字符
+Invalid rule phrases|规则词组为空、过长或超过数量限制
+Invalid combination match or window|组合匹配方式或跨度无效
+Use 2 to 5 condition groups|请配置 2 至 5 个条件组
+Condition groups must not share the same term|不同条件组不能包含相同词项
+Exceptions must contain one complete clause without separators|例外必须是单个完整分句，不包含分句分隔符
+Advanced rule is too large|高级规则内容过长
+Advanced rules require import version 2|高级规则需使用版本 2 导入格式
+Combination key already exists|组合规则标识已存在
+Exception target combination does not exist|例外所引用的组合规则不存在
+Rule library exceeds the portable size limit|规则库已超过可导入导出的大小限制（900 KB）
 Home|首页
 Discover|发现
 Shorts|短视频
