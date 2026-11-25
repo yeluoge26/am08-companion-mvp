@@ -100,7 +100,7 @@ const handleChat=createChatHandler({db,metrics,relationships,operations,transact
 async function api(req,res,url){const route=url.pathname,method=req.method,session=getSession(req);const isWrite=!['GET','HEAD'].includes(method);
   let accessActor=session?.user_id||null;
   if(route.startsWith('/api/admin/')||route==='/api/auth/admin-login')res.once('finish',()=>{try{rbac.logAccess(accessActor,accessActor?rbac.identity(accessActor)?.role:null,method,route,res.statusCode)}catch{console.error('Staff access audit failed')}});
-  if(session?.role==='user'&&req.headers['x-admin-context']!=='1'&&/^\/api\/(me|characters|conversations|favorites|wallet|orders|reports|chat)(?:\/|$)/.test(route))res.once('finish',()=>{if(res.statusCode<400){try{metrics.touch(session.user_id)}catch{console.error('Activity recording failed')}}});
+  if(session?.role==='user'&&req.headers['x-admin-context']!=='1'&&/^\/api\/(me|characters|conversations|favorites|wallet|orders|reports|chat|beta)(?:\/|$)/.test(route))res.once('finish',()=>{if(res.statusCode<400){try{metrics.touch(session.user_id)}catch{console.error('Activity recording failed')}}});
   if(route==='/api/features'&&method==='GET')return json(res,200,operations.features());
   if(route==='/api/health'&&method==='GET')return json(res,200,{ok:true,modelEnabled:modelConfig().enabled});
   if(route==='/api/billing/webhook'&&method==='POST'){

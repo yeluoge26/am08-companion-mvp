@@ -102,6 +102,7 @@ test('beta experience loop',async t=>{
   const r=await Promise.all([redeem(a),redeem(b)]);assert.deepEqual(r.map(x=>x.status).sort(),[200,400]);winner=r[0].status===200?a:b;
   assert.equal(db.prepare('SELECT used FROM invite_codes WHERE id=?').get(code.id).used,1);
   assert.equal(db.prepare("SELECT COUNT(*) n FROM ledger WHERE reason='beta_grant'").get().n,1);
+  assert.ok(db.prepare('SELECT 1 FROM user_activity_days WHERE user_id=? AND day=?').get(winner.id,new Date().toISOString().slice(0,10)));
  });
  await t.test('same code repeated is idempotent and grants active membership',async()=>{
   const before=(await call('/api/me',{actor:winner})).body;
