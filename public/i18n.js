@@ -72,6 +72,8 @@ Wait for the review decision|请等待审核结论后再申诉
 An appeal has already been submitted|您已提交过申诉
 Another reviewer must handle this appeal|请由其他审核员处理该申诉，或由超管复核
 Appeal not found|申诉不存在
+Awaiting review|待审核
+Awaiting appeal review|待处理申诉
 Home|首页
 Discover|发现
 Shorts|短视频
