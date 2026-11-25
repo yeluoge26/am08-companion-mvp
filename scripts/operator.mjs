@@ -13,8 +13,12 @@ const db=new DatabaseSync(path.join(dir,'app.sqlite'));db.exec('PRAGMA busy_time
 if(command==='backup'){const file=path.join(dir,'backup-'+Date.now()+'.sqlite');db.prepare('VACUUM INTO ?').run(file);console.log('Consistent database backup created: '+file)}else{
  const user=db.prepare('SELECT id,email FROM users WHERE email=?').get(String(email).toLowerCase());if(!user)throw Error('Account not found');
  db.exec('BEGIN IMMEDIATE');try{
- if(command==='promote')db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user.id);
- else{const p=process.env.NEW_PASSWORD;if(!p||p.length<12||p.length>128)throw Error('Set NEW_PASSWORD to a unique 12–128 character value');const salt=randomBytes(16).toString('hex'),digest=scryptSync(p,salt,64).toString('hex');db.prepare('UPDATE users SET password=? WHERE id=?').run(salt+':'+digest,user.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id)}
+ if(command==='promote'){
+  db.prepare("UPDATE users SET role='admin' WHERE id=?").run(user.id);
+  if(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='staff_roles'").get())db.prepare("INSERT INTO staff_roles VALUES(?,'superadmin','active',1,?) ON CONFLICT(user_id) DO UPDATE SET role='superadmin',status='active',version=staff_roles.version+1,updated=excluded.updated").run(user.id,new Date().toISOString());
+  db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);
+ }
+ else{const p=process.env.NEW_PASSWORD;if(!p||p.length<12||p.length>128)throw Error('Set NEW_PASSWORD to a unique 12–128 character value');const salt=randomBytes(16).toString('hex'),digest=scryptSync(p,salt,64).toString('hex');db.prepare('UPDATE users SET password=? WHERE id=?').run(salt+':'+digest,user.id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(user.id);db.prepare('UPDATE password_resets SET used=1 WHERE user_id=?').run(user.id)}
  db.prepare('INSERT INTO audit VALUES(?,?,?,?,?,?)').run(randomBytes(16).toString('hex'),'operator-cli','operator.'+command,user.id,'{}',new Date().toISOString());db.exec('COMMIT');console.log(command+' completed for '+user.email);
  }catch(e){db.exec('ROLLBACK');throw e}
 }

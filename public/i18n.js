@@ -1,7 +1,32 @@
 (() => {
 'use strict';
 // Exact UI phrases only. User-authored content is explicitly marked translate="no".
-const zh = Object.fromEntries(`Home|首页
+const zh = Object.fromEntries(`Staff accounts|员工账号
+Create staff account|创建员工账号
+Super administrator|超级管理员
+Operations|运营
+Reviewer|审核
+Finance|财务
+Support|客服
+Access audit|接口访问审计
+Actor|操作人
+Method|方法
+Path|路径
+Details|详情
+Read only|只读
+Initial password|初始密码
+Reset password|重置密码
+Disabled|已停用
+Staff permission required|没有此操作的权限
+Staff account is disabled|员工账号已停用
+Invalid staff role or status|员工角色或状态无效
+Staff account not found|员工账号不存在
+You cannot change your own role or disable yourself|不能修改自己的角色或停用自己
+At least one active super administrator is required|必须保留至少一名可用超管
+Use staff management for employee accounts|请在员工账号页面管理此账号
+Latest 200 requests. Request bodies and passwords are never recorded.|最近 200 条请求，不记录请求正文和密码。
+Up to 100 matching accounts. Search by name or email.|最多显示 100 个匹配账号，可按姓名或邮箱搜索。
+Home|首页
 Discover|发现
 Shorts|短视频
 Chat|聊天
