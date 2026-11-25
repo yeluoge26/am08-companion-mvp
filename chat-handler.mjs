@@ -1,12 +1,14 @@
 import {modelConfig,generateReply,updateMemory} from './openai.mjs';
 
-export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community}){
+export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community,safety}){
  const inFlight=new Set();
  const one=(q,...a)=>db.prepare(q).get(...a),all=(q,...a)=>db.prepare(q).all(...a),run=(q,...a)=>db.prepare(q).run(...a);
  return async function handleChat(req,res,body,conversation,user){
   const config=operations.config();
   if(!config.chatEnabled)fail(503,'Companion chat is disabled by the operator.');
   const content=text(body.content,4000),requestKey=text(req.headers['idempotency-key']||id(),100);
+  limit(`messages:${user.id}`,60,60000);
+  safety.check(user,conversation.id,content,requestKey);
   const replay=one('SELECT * FROM chat_runs WHERE user_id=? AND request_key=?',user.id,requestKey);
   if(replay){
    if(community.blocked('message',replay.message_id)||community.blocked('message',replay.assistant_id))fail(409,'Content is already under moderation');
@@ -14,7 +16,7 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
    if(replay.status==='pending')fail(409,'AI reply is still pending');
    return json(res,200,{message:one('SELECT * FROM messages WHERE id=?',replay.message_id),assistantMessage:one('SELECT * FROM messages WHERE id=?',replay.assistant_id)||null,replyError:replay.error,access:operations.access(user.id),duplicate:true,relationship:relationships.state(user.id,conversation.character_id),modelEnabled:modelConfig().enabled});
   }
-  limit(`messages:${user.id}`,60,60000);
+
   let mid=id(),runId=id();
   transaction(()=>{
    if(inFlight.has(user.id)||one("SELECT id FROM chat_runs WHERE user_id=? AND status='pending'",user.id))fail(409,'AI reply is still pending');

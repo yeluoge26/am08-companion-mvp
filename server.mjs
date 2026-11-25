@@ -12,6 +12,7 @@ import {createTokenEconomy} from './token-economy.mjs';
 import {createRBAC} from './rbac.mjs';
 import {createMetrics} from './metrics.mjs';
 import {createRelationships} from './relationships.mjs';
+import {createContentSafety} from './content-safety.mjs';
 import {createCommunity} from './community.mjs';
 import {createManagement} from './management.mjs';
 
@@ -78,6 +79,7 @@ const management=createManagement({db,transaction,audit,fail,now,id,text,json,op
 const economy=createTokenEconomy({db,transaction,fail,id,now,audit});
 const relationships=createRelationships({db,transaction,id,now,fail,audit});
 const community=createCommunity({db,transaction,fail,id,now,audit,text,visibleCharacter});
+const safety=createContentSafety({db,transaction,fail,id,now,audit,text,json});
 const metrics=createMetrics({db,now,fail});
 const rbac=createRBAC({db,transaction,now,id,fail,audit,text,email,password,passwordHash,passwordValid,json});
 // All accounts are ordinary users unless explicitly bootstrapped by the operator.
@@ -91,7 +93,7 @@ function verifyMutation(req,session){if(req.headers.origin!==ORIGIN)fail(403,'Or
 async function sendReset(email,token){const message={to:email,subject:'Reset your companion account password',text:`Reset your password within 15 minutes: ${ORIGIN}/#reset/${token}\nIf you did not request this, ignore this message.`};if(process.env.MAIL_MODE==='outbox'&&!production){const outbox=path.join(DATA,'outbox');fs.mkdirSync(outbox,{recursive:true,mode:0o700});fs.writeFileSync(path.join(outbox,id()+'.json'),JSON.stringify(message),{mode:0o600});return}if(!process.env.MAIL_WEBHOOK_URL||!process.env.MAIL_WEBHOOK_TOKEN)fail(503,'Email delivery is not configured');const destination=new URL(process.env.MAIL_WEBHOOK_URL);if(destination.protocol!=='https:')fail(503,'Email adapter requires HTTPS');const r=await fetch(destination,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.MAIL_WEBHOOK_TOKEN},body:JSON.stringify(message),signal:AbortSignal.timeout(10000)});if(!r.ok)fail(503,'Email delivery is temporarily unavailable')}
 function grantOrder(order,eventKey){return management.grant(order,eventKey)}
 
-const handleChat=createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community});
+const handleChat=createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community,safety});
 
 async function api(req,res,url){const route=url.pathname,method=req.method,session=getSession(req);const isWrite=!['GET','HEAD'].includes(method);
   let accessActor=session?.user_id||null;
@@ -210,6 +212,7 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
     if(user.role!=='admin')fail(403,'Administrator access required');
     const staff=rbac.authorize(user.id,method,route);user.staffRole=staff.role;user.permissions=staff.permissions;
     if(await rbac.handle(req,res,url,user,body))return;
+    if(await safety.handle(req,res,url,user,body))return;
     if(route==='/api/admin/metrics'&&method==='GET')return json(res,200,metrics.report(url.searchParams));
     if(route==='/api/admin/relationship-rules'&&method==='GET')return json(res,200,{config:relationships.config()});
     if(route==='/api/admin/relationship-rules'&&method==='PUT')return json(res,200,{config:relationships.saveConfig(body,user.id)});

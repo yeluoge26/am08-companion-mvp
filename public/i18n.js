@@ -74,6 +74,45 @@ Another reviewer must handle this appeal|请由其他审核员处理该申诉，
 Appeal not found|申诉不存在
 Awaiting review|待审核
 Awaiting appeal review|待处理申诉
+Content safety rules|内容安全规则
+Safety hit records|安全命中记录
+Safety settings|安全规则配置
+Create safety rule|新增安全规则
+Rule label|规则名称
+Rule type|规则类型
+Value|匹配内容
+Matching mode|匹配方式
+Keyword|禁词
+User ID|用户 ID
+User ID blacklist|用户 ID 黑名单
+Email blacklist|邮箱黑名单
+Matched rules|命中规则
+Rule version|配置版本
+Contains|包含匹配
+Whole word|整词匹配
+Exact match|精确匹配
+contains|包含
+word|整词
+exact|精确
+keyword|禁词
+email|邮箱
+Enabled|已启用
+Enable keyword protection|启用禁词拦截
+Enable blacklist protection|启用黑名单拦截
+Keyword protection:|禁词拦截：
+Blacklist protection:|黑名单拦截：
+Local input rules only. No automatic semantic or output review. New requests use the latest rules.|本地聊天输入规则，不包含语义识别或输出审核；新请求使用最新规则。
+Blocked inputs are not saved as chat messages and use no quota or tokens. Original text is not recorded here.|被拦截输入不会保存为聊天消息，也不消耗免费额度或代币；此处不记录原文。
+Blacklist rules require Exact match. Keyword matching ignores case, width and common invisible characters. Whole word uses letter and number boundaries; use Contains for Chinese phrases. Disable a rule to remove its effect.|黑名单请选择精确匹配。禁词忽略大小写、全半角和常见不可见字符；整词按字母数字边界匹配，中文短语建议使用包含匹配。停用规则即可解除其限制。
+This message was blocked by content safety rules. No quota or tokens were used.|该消息被内容安全规则拦截，未消耗免费额度或代币。
+Invalid safety settings|安全配置无效
+Invalid safety rule|规则无效，黑名单须选择精确匹配
+Choose an existing member user ID|请选择已有普通用户的 ID
+Staff accounts cannot be blacklisted|不能将员工账号加入黑名单
+Safety rule not found|安全规则不存在
+Safety rule limit reached|安全规则已达 1000 条上限，请编辑已有规则
+This safety rule already exists|相同安全规则已存在
+Only enabled rules block messages. An empty rule list blocks nothing.|仅启用的规则会拦截消息；未配置规则时不会拦截。
 Home|首页
 Discover|发现
 Shorts|短视频

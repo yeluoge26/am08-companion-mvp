@@ -68,7 +68,7 @@ test('operations, streaming, memory, quota and subscription lifecycle',async t=>
   assert.equal((await send('subscriber reply','paid')).body.access.unlimited,true);
   await call('/api/subscription/cancel',{actor:a,body:{}});
   assert.equal((await call('/api/chat/access',{actor:a})).body.subscribed,true);
-  const db=new DatabaseSync(path.join(data,'app.sqlite'));db.prepare('UPDATE subscriptions SET expires=? WHERE user_id=?').run('2000-01-01T00:00:00Z',a.id);db.close();
+  const db=new DatabaseSync(path.join(data,'app.sqlite'));db.exec('PRAGMA busy_timeout=5000');db.prepare('UPDATE subscriptions SET expires=? WHERE user_id=?').run('2000-01-01T00:00:00Z',a.id);db.close();
   assert.equal((await send('expired','expired')).status,402);
  });
  await t.test('memory edit, opt out, deletion and stale write protection',async()=>{
