@@ -57,7 +57,7 @@ test('beta experience loop',async t=>{
  });
  let official;
  await t.test('structured persona and greeting remain editable with review state',async()=>{
-  const r=await call('/api/admin/characters',{actor:admin,body:{name:'Beta fictional guide',age:26,style:'Realistic',gender:'female',status:'published',rank:9000,image:chars[0].image,prompt:'legacy marker',persona_status:'reviewed',persona_fields:{background:'FICTIONAL_TEST_BACKGROUND',speech:'自然简洁'},greeting:'你好，今天有什么想聊的？',reason:'test'}});
+  const r=await call('/api/admin/characters',{actor:admin,body:{name:'Beta fictional guide',age:26,style:'Realistic',gender:'female',status:'published',rank:9000,image:chars[0].image,prompt:'legacy marker',persona_status:'reviewed',persona_fields:{background:'FICTIONAL_TEST_BACKGROUND',speech:'自然简洁',level2:'CHARACTER_LEVEL_TWO'},greeting:'你好，今天有什么想聊的？',reason:'test'}});
   assert.equal(r.status,201,JSON.stringify(r.body));official=r.body.character;
   const list=await call('/api/admin/characters?sort=popular&persona_status=reviewed',{actor:admin});assert.equal(list.status,200,JSON.stringify(list.body));assert.ok(list.body.characters.some(c=>c.id===official.id));
   assert.equal((await call('/api/characters')).body.characters[0].id,official.id);
@@ -78,7 +78,7 @@ test('beta experience loop',async t=>{
   await call('/api/characters/'+official.id+'/relationship',{actor:a,method:'PATCH',body:{revision:rel.revision,anniversaries:[{title:'TEST_ANNIVERSARY',date:new Date().toISOString().slice(0,10)}]}});
   const post=key=>call('/api/conversations/'+greetingConv+'/messages',{actor:a,key,body:{content:'PERSONA_CONTEXT'}});
   const first=await post('context1');assert.match(first.body.assistantMessage.content,/RELATION_HINT_1/);assert.match(first.body.assistantMessage.content,/TEST_ANNIVERSARY/);assert.match(first.body.assistantMessage.content,/FICTIONAL_TEST_BACKGROUND/);assert.ok(!first.body.assistantMessage.content.includes('legacy marker'));assert.equal(first.body.relationship.newInteraction,true);
-  const second=await post('context2');assert.match(second.body.assistantMessage.content,/RELATION_HINT_2/);assert.match(second.body.assistantMessage.content,/justUnlocked/);
+  const second=await post('context2');assert.match(second.body.assistantMessage.content,/CHARACTER_LEVEL_TWO/);assert.match(second.body.assistantMessage.content,/justUnlocked/);
  });
  await t.test('feature settings are versioned and backend creation is enforced',async()=>{
   await configure({betaMode:true,features:{...config.features,createCharacter:false}});

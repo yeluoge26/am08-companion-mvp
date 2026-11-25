@@ -21,7 +21,7 @@ export function applyCharacterPersonas(db, manifest, {apply=false}={}) {
       if(!apply)continue;
       settings.prompt=entry.prompt;
       db.prepare('UPDATE characters SET settings=? WHERE id=?').run(JSON.stringify(settings),entry.id);
-      db.prepare('UPDATE character_admin SET version=version+1 WHERE character_id=?').run(entry.id);
+      db.prepare('INSERT INTO character_admin(character_id,version) VALUES(?,2) ON CONFLICT(character_id) DO UPDATE SET version=character_admin.version+1').run(entry.id);
       db.prepare('INSERT INTO audit VALUES(?,?,?,?,?,?)').run(randomUUID(),'operator-cli','characters.derive-persona',entry.id,JSON.stringify({method:manifest.method,confidence:entry.confidence,sourceSha256:entry.sourceSha256}),new Date().toISOString());
     }
     db.exec(apply?'COMMIT':'ROLLBACK');

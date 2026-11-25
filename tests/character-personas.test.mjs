@@ -17,7 +17,7 @@ test('derived catalog covers existing characters without publishing personas in 
 test('persona import previews, preserves manual/private settings and assets, audits and is idempotent',()=>{
   const db=new DatabaseSync(':memory:');
   try{
-    db.exec('CREATE TABLE characters(id TEXT PRIMARY KEY,owner_id TEXT,settings TEXT,image TEXT,video TEXT); CREATE TABLE character_admin(character_id TEXT,version INTEGER); CREATE TABLE audit(id TEXT,actor TEXT,action TEXT,target TEXT,detail TEXT,created TEXT)');
+    db.exec('CREATE TABLE characters(id TEXT PRIMARY KEY,owner_id TEXT,settings TEXT,image TEXT,video TEXT); CREATE TABLE character_admin(character_id TEXT PRIMARY KEY,version INTEGER); CREATE TABLE audit(id TEXT,actor TEXT,action TEXT,target TEXT,detail TEXT,created TEXT)');
     const entries=manifest.characters.slice(0,4);
     for(const [index,e] of entries.entries()){
       db.prepare('INSERT INTO characters VALUES(?,?,?,?,?)').run(e.id,index===2?'member':null,JSON.stringify({ageKnown:false,voice:'original',...(index===1?{prompt:'Manual prompt'}:{})}),'image.bin','video.mp4');
