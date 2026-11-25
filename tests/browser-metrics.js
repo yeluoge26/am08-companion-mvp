@@ -1,0 +1,9 @@
+async (page) => {
+ const base='http://127.0.0.1:4180';await page.goto(base+'/admin/#admin/metrics');await page.locator('#metrics-dashboard').waitFor();
+ const expected=await page.evaluate(async()=>await(await fetch('/api/admin/metrics',{headers:{'X-Admin-Context':'1'}})).json());
+ const cards=await page.locator('#metrics-dashboard > .metrics-stats .stat strong').allTextContents();const actual=cards.map(x=>Number(x.replace(/[^0-9.-]/g,'')));const s=expected.summary;
+ if(JSON.stringify(actual)!==JSON.stringify([s.registered,s.totalUsers,s.active,s.dau,s.wau,s.mau]))throw Error('UI/API metric mismatch');
+ await page.locator('#metrics-filter [name=from]').fill(expected.range.today);await page.locator('#metrics-filter [name=to]').fill(expected.range.today);await page.locator('#metrics-filter [type=submit]').click();await page.waitForFunction(()=>document.querySelectorAll('#metrics-dashboard .metrics-chart rect').length===2);
+ const before=await page.evaluate(async()=>(await(await fetch('/api/admin/metrics',{headers:{'X-Admin-Context':'1'}})).json()).summary.dau);await page.reload();await page.locator('#metrics-dashboard').waitFor();const after=await page.evaluate(async()=>(await(await fetch('/api/admin/metrics',{headers:{'X-Admin-Context':'1'}})).json()).summary.dau);if(before!==after)throw Error('Admin refresh counted as activity');
+ await page.locator('#language-select').selectOption('en');await page.getByRole('heading',{name:'Operations data',exact:true}).waitFor();await page.setViewportSize({width:390,height:844});const dimensions=await page.evaluate(()=>({viewport:innerWidth,content:document.documentElement.scrollWidth}));if(dimensions.content>dimensions.viewport+1)throw Error('Mobile overflow');await page.setViewportSize({width:1440,height:1000});await page.locator('#language-select').selectOption('zh-CN');return {matched:true,filtered:true,adminExcluded:true,dimensions};
+}

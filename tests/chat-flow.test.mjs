@@ -165,6 +165,15 @@ test('operations, streaming, memory, quota and subscription lifecycle',async t=>
   const privateChar=(await call('/api/characters',{actor:a,body:{name:'Private relation',age:25,style:'Realistic',gender:'female',image:chars[0].image,personality:'Friendly',description:''}})).body.character;
   assert.equal((await call(`/api/characters/${privateChar.id}/relationship`,{actor:b})).status,404);
  });
+ await t.test('metrics count recorded chat and memory usage without exposing private content',async()=>{
+  assert.equal((await call('/api/admin/metrics',{actor:a})).status,403);
+  assert.equal((await call('/api/admin/metrics?to=bad',{actor:admin})).status,400);
+  const d=(await call('/api/admin/metrics',{actor:admin})).body;
+  assert.equal(d.summary.totalUsers,2);assert.equal(d.summary.registered,2);assert.equal(d.summary.active,2);
+  assert.ok(d.chat.completed>0);assert.ok(d.chat.failed>0);assert.ok(d.chat.inputTokens>0);assert.ok(d.memory.recordedCalls>0);assert.equal(d.memory.inputTokens,d.memory.recordedCalls*7);
+  assert.equal(d.tokens.consumed,0);assert.equal(d.retention[0].periods[0].status,'pending');
+  assert.ok(!JSON.stringify(d).includes('测试名字'));assert.ok(!JSON.stringify(d).includes('alice@test.local'));
+ });
  await t.test('user management revokes suspended sessions, blocks login and protects admins',async()=>{
   const detail=(await call('/api/admin/users/'+b.id,{actor:admin})).body;
   assert.ok(!('messages' in detail));assert.ok(!('memory' in detail));assert.ok(!('password' in detail.user));

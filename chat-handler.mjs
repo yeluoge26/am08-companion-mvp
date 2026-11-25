@@ -1,6 +1,6 @@
 import {modelConfig,generateReply,updateMemory} from './openai.mjs';
 
-export function createChatHandler({db,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies}){
+export function createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies}){
  const inFlight=new Set();
  const one=(q,...a)=>db.prepare(q).get(...a),all=(q,...a)=>db.prepare(q).all(...a),run=(q,...a)=>db.prepare(q).run(...a);
  return async function handleChat(req,res,body,conversation,user){
@@ -45,7 +45,7 @@ export function createChatHandler({db,relationships,operations,transaction,audit
    transaction(()=>{run('INSERT INTO messages VALUES(?,?,?,?,?)',aid,conversation.id,'assistant',result.content,now());run('UPDATE conversations SET updated=? WHERE id=?',now(),conversation.id);run("UPDATE chat_runs SET status='completed',assistant_id=?,usage=?,completed=? WHERE id=?",aid,JSON.stringify(result.usage),now(),runId);relationships.award(user.id,conversation.character_id,runId);audit(user.id,'ai.reply',conversation.id,{model:result.model,usage:result.usage,stream})});
    assistantMessage=one('SELECT * FROM messages WHERE id=?',aid);
    if(stream)emit('reply',{assistantMessage,relationship:relationships.state(user.id,conversation.character_id),access:operations.access(user.id)});
-   if(useMemory){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
+   if(useMemory){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal,onUsage:usage=>metrics.recordMemory(user.id,runId,config.model,usage)});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
   }catch(e){
    replyError=e.message.startsWith('AI ')?e.message:'AI service is temporarily unavailable. Your message was saved.';
    run("UPDATE chat_runs SET status='failed',error=?,completed=? WHERE id=? AND status='pending'",replyError,now(),runId);

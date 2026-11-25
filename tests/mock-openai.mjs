@@ -6,7 +6,7 @@ globalThis.fetch=async(url,options)=>{
  if(payload.text?.format?.name==='user_memory'){
   const input=JSON.parse(payload.input);if(input.userMessage.includes('SLOW_MEMORY'))await new Promise(r=>setTimeout(r,250));
   const summary=input.userMessage.includes('测试名字')?input.userMessage:input.previousMemory;
-  return Response.json({output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({summary})}]}]});
+  return Response.json({usage:{input_tokens:7,output_tokens:3},output:[{type:'message',content:[{type:'output_text',text:JSON.stringify({summary})}]}]});
  }
  const content=payload.input.at(-1).content;
  const attempt=(attempts.get(content)||0)+1;attempts.set(content,attempt);
