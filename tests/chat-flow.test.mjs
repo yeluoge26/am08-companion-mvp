@@ -136,6 +136,35 @@ test('operations, streaming, memory, quota and subscription lifecycle',async t=>
   const res=await send('no incremental stream','buffered',{stream:true});let deltas=0;for await(const e of readEvents(res.body))if(e.delta)deltas++;
   assert.equal(deltas,1);
  });
+ await t.test('relationship growth is idempotent, capped, private and configurable',async()=>{
+  const rules=(await call('/api/admin/relationship-rules',{actor:admin})).body.config;
+  assert.equal((await call('/api/admin/relationship-rules',{actor:a})).status,403);
+  const updated=await call('/api/admin/relationship-rules',{actor:admin,method:'PUT',body:{...rules,xpPerReply:7,dailyCap:10,levels:rules.levels.map((l,i)=>({...l,xp:i*8})),reason:'test growth'}});assert.equal(updated.status,200);
+  let cfg=updated.body.config;
+  assert.equal((await call('/api/admin/relationship-rules',{actor:admin,method:'PUT',body:{...rules,reason:'stale'}})).status,409);
+  assert.equal((await call('/api/admin/relationship-rules',{actor:admin,method:'PUT',body:{...cfg,levels:cfg.levels.map(l=>({...l,xp:0})),reason:'invalid'}})).status,400);
+  const char=chars[5].id,route=`/api/characters/${char}/relationship`;
+  let conv=(await call('/api/conversations',{actor:a,body:{characterId:char}})).body.conversation.id;
+  const first=await send('growth one','growth-1',{cid:conv});assert.equal(first.body.relationship.xp,7);
+  assert.equal((await send('growth one','growth-1',{cid:conv})).body.relationship.xp,7);
+  const second=await send('growth two','growth-2',{cid:conv});assert.equal(second.body.relationship.xp,10);assert.equal(second.body.relationship.level,2);assert.equal(second.body.relationship.badges.length,2);assert.equal(second.body.relationship.milestones.length,1);
+  assert.equal((await send('growth cap','growth-3',{cid:conv})).body.relationship.xp,10);
+  assert.equal((await call(route,{actor:b})).body.relationship.xp,0);
+  const failed=await send('INTERRUPTED','growth-failure',{cid:conv,stream:true});for await(const e of readEvents(failed.body)){}assert.equal((await call(route,{actor:a})).body.relationship.xp,10);
+  let r=(await call(route,{actor:a})).body.relationship;
+  assert.equal((await call(route,{actor:a,method:'PATCH',body:{revision:r.revision,anniversaries:[{title:'Leap day',date:'2025-02-29'}]}})).status,400);
+  assert.equal((await call(route,{actor:a,method:'PATCH',body:{revision:r.revision,anniversaries:[{title:'First walk',date:'2024-02-29'}]}})).status,200);
+  assert.equal((await call(route,{actor:a,method:'PATCH',body:{revision:r.revision,anniversaries:[]}})).status,409);assert.equal((await call(route,{actor:b})).body.relationship.anniversaries.length,0);
+  const stopped=await call('/api/admin/relationship-rules',{actor:admin,method:'PUT',body:{...cfg,enabled:false,dailyCap:100,reason:'pause'}});cfg=stopped.body.config;
+  assert.equal((await send('growth paused','growth-4',{cid:conv})).body.relationship.xp,10);
+  cfg=(await call('/api/admin/relationship-rules',{actor:admin,method:'PUT',body:{...cfg,enabled:true,levels:cfg.levels.map((l,i)=>({...l,xp:i*100})),reason:'raise thresholds'}})).body.config;
+  assert.equal((await send('no downgrade','growth-5',{cid:conv})).body.relationship.level,2);
+  await call('/api/conversations/'+conv,{actor:a,method:'DELETE',body:{}});conv=(await call('/api/conversations',{actor:a,body:{characterId:char}})).body.conversation.id;
+  await stop();await start();r=(await call(route,{actor:a})).body.relationship;assert.equal(r.xp,17);assert.equal(r.level,2);assert.equal(r.anniversaries.length,1);
+  const exported=(await call('/api/me/export',{actor:a})).body;assert.ok(exported.relationships.some(x=>x.character_id===char));
+  const privateChar=(await call('/api/characters',{actor:a,body:{name:'Private relation',age:25,style:'Realistic',gender:'female',image:chars[0].image,personality:'Friendly',description:''}})).body.character;
+  assert.equal((await call(`/api/characters/${privateChar.id}/relationship`,{actor:b})).status,404);
+ });
  await t.test('user management revokes suspended sessions, blocks login and protects admins',async()=>{
   const detail=(await call('/api/admin/users/'+b.id,{actor:admin})).body;
   assert.ok(!('messages' in detail));assert.ok(!('memory' in detail));assert.ok(!('password' in detail.user));

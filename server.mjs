@@ -9,6 +9,7 @@ import {modelConfig,generateReply,updateMemory} from './openai.mjs';
 import {createOperations} from './operations.mjs';
 import {createChatHandler} from './chat-handler.mjs';
 import {createTokenEconomy} from './token-economy.mjs';
+import {createRelationships} from './relationships.mjs';
 import {createCommunity} from './community.mjs';
 import {createManagement} from './management.mjs';
 
@@ -73,6 +74,7 @@ transaction(()=>{for(const c of catalog){run(`INSERT INTO characters(id,owner_id
 if(process.env.ADMIN_EMAIL&&process.env.ADMIN_PASSWORD){const adminEmail=email(process.env.ADMIN_EMAIL);if(!one('SELECT id FROM users WHERE email=?',adminEmail)){run('INSERT INTO users VALUES(?,?,?,?,?,?)',id(),adminEmail,'Administrator',await passwordHash(password(process.env.ADMIN_PASSWORD)),'admin',now())}}
 const management=createManagement({db,transaction,audit,fail,now,id,text,json,operations,catalog,seeds:PLANS,availableBalance:uid=>economy.balance(uid).available});
 const economy=createTokenEconomy({db,transaction,fail,id,now,audit});
+const relationships=createRelationships({db,transaction,id,now,fail,audit});
 const community=createCommunity({db,transaction,fail,id,now,audit,text,visibleCharacter});
 // All accounts are ordinary users unless explicitly bootstrapped by the operator.
 function sessionCookie(req){return req.headers['x-admin-context']==='1'?'admin_sid':'sid'}
@@ -85,7 +87,7 @@ function verifyMutation(req,session){if(req.headers.origin!==ORIGIN)fail(403,'Or
 async function sendReset(email,token){const message={to:email,subject:'Reset your companion account password',text:`Reset your password within 15 minutes: ${ORIGIN}/#reset/${token}\nIf you did not request this, ignore this message.`};if(process.env.MAIL_MODE==='outbox'&&!production){const outbox=path.join(DATA,'outbox');fs.mkdirSync(outbox,{recursive:true,mode:0o700});fs.writeFileSync(path.join(outbox,id()+'.json'),JSON.stringify(message),{mode:0o600});return}if(!process.env.MAIL_WEBHOOK_URL||!process.env.MAIL_WEBHOOK_TOKEN)fail(503,'Email delivery is not configured');const destination=new URL(process.env.MAIL_WEBHOOK_URL);if(destination.protocol!=='https:')fail(503,'Email adapter requires HTTPS');const r=await fetch(destination,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.MAIL_WEBHOOK_TOKEN},body:JSON.stringify(message),signal:AbortSignal.timeout(10000)});if(!r.ok)fail(503,'Email delivery is temporarily unavailable')}
 function grantOrder(order,eventKey){return management.grant(order,eventKey)}
 
-const handleChat=createChatHandler({db,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies});
+const handleChat=createChatHandler({db,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies});
 
 async function api(req,res,url){const route=url.pathname,method=req.method,session=getSession(req);const isWrite=!['GET','HEAD'].includes(method);
   if(route==='/api/health'&&method==='GET')return json(res,200,{ok:true,modelEnabled:modelConfig().enabled});
@@ -133,6 +135,8 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   }
   if(/^\/api\/characters\/[^/]+$/.test(route)&&method==='GET')return json(res,200,{character:publicCharacter(visibleCharacter(route.split('/').pop(),session?{id:session.user_id}:null))});
   const {user}=authenticate(req);
+  const relationshipRoute=route.match(/^\/api\/characters\/([^/]+)\/relationship$/);
+  if(relationshipRoute&&['GET','PATCH'].includes(method)){const cid=relationshipRoute[1];visibleCharacter(cid,user,true);return json(res,200,{relationship:method==='PATCH'?relationships.saveAnniversaries(user.id,cid,body):relationships.state(user.id,cid)})}
   const characterMemoryRoute=route.match(/^\/api\/characters\/([^/]+)\/memory$/);
   if(characterMemoryRoute&&['GET','PATCH','DELETE'].includes(method)){
     const cid=characterMemoryRoute[1];visibleCharacter(cid,user,true);
@@ -166,7 +170,7 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   if(route==='/api/auth/logout'&&method==='POST'){run('DELETE FROM sessions WHERE token=?',session.token);res.setHeader('Set-Cookie',`${sessionCookie(req)}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${production?'; Secure':''}`);return json(res,200,{ok:true})}
   if(route==='/api/me'&&method==='PATCH'){const name=text(body.name,60);run('UPDATE users SET name=? WHERE id=?',name,user.id);return json(res,200,{user:{...user,name}})}
   if(route==='/api/auth/password'&&method==='POST'){const u=one('SELECT * FROM users WHERE id=?',user.id);if(!await passwordValid(text(body.currentPassword,128),u.password))fail(403,'Current password is incorrect');const digest=await passwordHash(password(body.password));transaction(()=>{run('UPDATE users SET password=? WHERE id=?',digest,user.id);run('DELETE FROM sessions WHERE user_id=?',user.id);audit(user.id,'password.changed',user.id)});if(management.userState(user.id).status==='suspended')fail(403,'Account suspended. Contact the operator.');const csrf=newSession(res,user);return json(res,200,{ok:true,csrf})}
-  if(route==='/api/me/export'&&method==='GET'){return json(res,200,{user,relationshipMemories:all('SELECT character_id,summary,enabled,revision,updated FROM relationship_memories WHERE user_id=?',user.id),spending:economy.balance(user.id),reports:all('SELECT id,target_type,target_id,reason,status,resolution,created FROM reports WHERE reporter=?',user.id),memory:operations.memory(user.id),chatAccess:operations.access(user.id),characters:all('SELECT * FROM characters WHERE owner_id=?',user.id),favorites:all('SELECT * FROM favorites WHERE user_id=?',user.id),conversations:all('SELECT * FROM conversations WHERE user_id=?',user.id),messages:all('SELECT messages.* FROM messages JOIN conversations ON conversations.id=messages.conversation_id WHERE conversations.user_id=?',user.id),orders:all('SELECT * FROM orders WHERE user_id=?',user.id),ledger:all('SELECT * FROM ledger WHERE user_id=?',user.id)})}
+  if(route==='/api/me/export'&&method==='GET'){return json(res,200,{user,relationshipEvents:all('SELECT character_id,xp,rule_version,created FROM relationship_events WHERE user_id=?',user.id),relationshipMilestones:all('SELECT character_id,level,created FROM relationship_milestones WHERE user_id=?',user.id),relationships:all('SELECT character_id,xp,level,started,anniversaries FROM relationships WHERE user_id=?',user.id),relationshipMemories:all('SELECT character_id,summary,enabled,revision,updated FROM relationship_memories WHERE user_id=?',user.id),spending:economy.balance(user.id),reports:all('SELECT id,target_type,target_id,reason,status,resolution,created FROM reports WHERE reporter=?',user.id),memory:operations.memory(user.id),chatAccess:operations.access(user.id),characters:all('SELECT * FROM characters WHERE owner_id=?',user.id),favorites:all('SELECT * FROM favorites WHERE user_id=?',user.id),conversations:all('SELECT * FROM conversations WHERE user_id=?',user.id),messages:all('SELECT messages.* FROM messages JOIN conversations ON conversations.id=messages.conversation_id WHERE conversations.user_id=?',user.id),orders:all('SELECT * FROM orders WHERE user_id=?',user.id),ledger:all('SELECT * FROM ledger WHERE user_id=?',user.id)})}
   if(route==='/api/characters'&&method==='POST'){
     const name=text(body.name,60),age=Number(body.age);if(!Number.isInteger(age)||age<18||age>100)fail(400,'Age must be 18–100');if(!['Realistic','Anime'].includes(body.style))fail(400,'Invalid style');if(!['female','male'].includes(body.gender))fail(400,'Invalid gender');
     const image=text(body.image,200);if(!catalog.some(c=>c.image===image))fail(400,'Choose an existing library image');if(one('SELECT COUNT(*) AS n FROM characters WHERE owner_id=?',user.id).n>=100)fail(409,'Character limit reached');const cid=id();run('INSERT INTO characters VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',cid,user.id,name,age,body.style,body.gender,text(body.description||'',1000,false),image,null,null,JSON.stringify({personality:text(body.personality||'Friendly',100),voice:text(body.voice||'Not connected',80)}),now());return json(res,201,{character:publicCharacter(one('SELECT * FROM characters WHERE id=?',cid))})
@@ -181,7 +185,7 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
     const conversation=one('SELECT * FROM conversations WHERE id=? AND user_id=?',convMatch[1],user.id);
     if(!conversation)fail(404,'Conversation not found');
     if(method==='DELETE'&&!convMatch[2]){if(pendingReplies.has(conversation.id))fail(409,'AI reply is still pending');run('DELETE FROM conversations WHERE id=?',conversation.id);return json(res,200,{ok:true})}
-    if(method==='GET')return json(res,200,{conversation,messages:all('SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid',conversation.id),failures:all("SELECT r.message_id,r.content,r.error FROM chat_runs r WHERE r.conversation_id=? AND r.user_id=? AND r.status='failed' AND r.rowid=(SELECT MAX(r2.rowid) FROM chat_runs r2 WHERE r2.message_id=r.message_id)",conversation.id,user.id),character:publicCharacter(visibleCharacter(conversation.character_id,user,true)),relationshipMemory:operations.memoryState(user.id,conversation.character_id),access:operations.access(user.id),modelEnabled:modelConfig().enabled});
+    if(method==='GET')return json(res,200,{conversation,messages:all('SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid',conversation.id),failures:all("SELECT r.message_id,r.content,r.error FROM chat_runs r WHERE r.conversation_id=? AND r.user_id=? AND r.status='failed' AND r.rowid=(SELECT MAX(r2.rowid) FROM chat_runs r2 WHERE r2.message_id=r.message_id)",conversation.id,user.id),character:publicCharacter(visibleCharacter(conversation.character_id,user,true)),relationshipMemory:operations.memoryState(user.id,conversation.character_id),relationship:relationships.state(user.id,conversation.character_id),access:operations.access(user.id),modelEnabled:modelConfig().enabled});
     if(method==='POST'&&convMatch[2]){visibleCharacter(conversation.character_id,user);return handleChat(req,res,body,conversation,user);}
   }
   if(route==='/api/generate'&&method==='POST')fail(503,'Model API is not connected. No credits have been deducted.');
@@ -192,6 +196,8 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   if(route==='/api/subscription/cancel'&&method==='POST'){run('UPDATE subscriptions SET status=? WHERE user_id=?','non-renewing',user.id);audit(user.id,'subscription.non-renewing',user.id);return json(res,200,{ok:true,notice:'This MVP does not initiate recurring charges. Existing access continues until expiry.'})}
   if(route.startsWith('/api/admin/')){
     if(user.role!=='admin')fail(403,'Administrator access required');
+    if(route==='/api/admin/relationship-rules'&&method==='GET')return json(res,200,{config:relationships.config()});
+    if(route==='/api/admin/relationship-rules'&&method==='PUT')return json(res,200,{config:relationships.saveConfig(body,user.id)});
     if(route==='/api/admin/pricing-rules'&&method==='GET')return json(res,200,{rules:economy.rules()});
     if(route==='/api/admin/pricing-rules'&&method==='PUT')return json(res,200,{rules:economy.saveRule(body,user.id)});
     if(route==='/api/admin/reports'&&method==='GET')return json(res,200,{reports:community.list()});

@@ -1,0 +1,13 @@
+async (page) => {
+ const ctx=await page.context().browser().newContext(),p=await ctx.newPage(),base='http://127.0.0.1:4180',password='relationship-ui-password-2026';let signedUp=false;
+ try{
+  await p.goto(base+'/#register');await p.locator('[name=name]').fill('Relationship regression');await p.locator('[name=email]').fill('relationship-'+Date.now()+'@example.test');await p.locator('[name=password]').fill(password);await p.locator('[name=adult]').check();await p.locator('#auth-form button').click();await p.waitForURL('**/#home');signedUp=true;
+  const conversations=await p.evaluate(async()=>{const a=await(await fetch('/api/me')).json(),characters=(await(await fetch('/api/characters')).json()).characters;const out=[];for(const c of characters.slice(0,2)){const r=await fetch('/api/conversations',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':a.csrf},body:JSON.stringify({characterId:c.id})});out.push((await r.json()).conversation)}return out});
+  async function open(i){await p.goto(base+'/#chat/'+conversations[i].id);await p.locator('#relationship-card[data-character="'+conversations[i].character_id+'"]').waitFor();await p.locator('[data-action=relationship]').click();await p.locator('#relationship-form[data-character="'+conversations[i].character_id+'"]').waitFor();}
+  await open(0);await p.locator('[data-action=add-anniversary]').click();await p.locator('#relationship-form [name=title]').fill('Our first walk');await p.locator('#relationship-form [name=date]').fill('2024-02-29');await p.locator('#relationship-form [type=submit]').click();await p.locator('#modal').waitFor({state:'hidden'});
+  await open(1);if(await p.locator('[data-anniversary-row]').count())throw Error('Anniversary isolation failed');await p.locator('[data-action=close-modal]').click();
+  await open(0);if(await p.locator('#relationship-form [name=title]').inputValue()!=='Our first walk')throw Error('Anniversary did not persist');await p.locator('[data-action=remove-anniversary]').click();await p.locator('#relationship-form [type=submit]').click();await p.locator('#modal').waitFor({state:'hidden'});
+  await open(0);if(await p.locator('[data-anniversary-row]').count())throw Error('Anniversary was not removed');await p.locator('[data-action=close-modal]').click();
+  return {saved:true,persisted:true,isolated:true,deleted:true};
+ }finally{if(signedUp)await p.evaluate(async password=>{const a=await(await fetch('/api/me')).json();const r=await fetch('/api/me',{method:'DELETE',headers:{'Content-Type':'application/json','X-CSRF-Token':a.csrf},body:JSON.stringify({password,confirm:true})});if(!r.ok)throw Error('Cleanup failed')},password);await ctx.close();}
+}
