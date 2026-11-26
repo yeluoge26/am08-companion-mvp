@@ -46,14 +46,14 @@ export function createChatHandler({db,metrics,relationships,operations,transacti
    const accountMemory=operations.memory(user.id),memory=operations.characterMemory(user.id,conversation.character_id),useMemory=config.memoryEnabled&&accountMemory.enabled&&memory.enabled;
    let accumulated='',outputBlocked=false,result;
    const inspect=chunk=>{accumulated+=chunk;if(safety.check(user,conversation.id,accumulated,requestKey,'output')){outputBlocked=true;abort.abort();throw Error('Output blocked')}if(stream)emit('delta',{delta:chunk})};
-   try{result=await generateReply(character,history,{config,memory:useMemory?memory.summary:'',onDelta:inspect,signal:abort.signal})}catch(e){if(!outputBlocked)throw e}
+   try{result=await generateReply(character,history,{config,budgetUser:user.id,memory:useMemory?memory.summary:'',onDelta:inspect,signal:abort.signal})}catch(e){if(!outputBlocked)throw e}
    if(!outputBlocked&&safety.check(user,conversation.id,result.content,requestKey,'output'))outputBlocked=true;
    if(outputBlocked){replyReplaced=true;result={content:config.outputFallback,usage:null,model:config.model};if(stream)emit('reply_replaced',{content:result.content})}
    const aid=id();
    transaction(()=>{run('INSERT INTO messages VALUES(?,?,?,?,?)',aid,conversation.id,'assistant',result.content,now());run('UPDATE conversations SET updated=? WHERE id=?',now(),conversation.id);run("UPDATE chat_runs SET status=?,assistant_id=?,usage=?,completed=? WHERE id=?",replyReplaced?'blocked':'completed',aid,JSON.stringify(result.usage),now(),runId);if(!replyReplaced){relationships.acknowledge(user.id,conversation.character_id,relationshipContext.level);relationships.award(user.id,conversation.character_id,runId)}audit(user.id,replyReplaced?'ai.reply.blocked':'ai.reply',conversation.id,{model:result.model,usage:result.usage,stream})});
    assistantMessage=one('SELECT * FROM messages WHERE id=?',aid);
    if(stream)emit('reply',{assistantMessage,relationship:relationships.state(user.id,conversation.character_id),access:operations.access(user.id)});
-   if(useMemory&&!replyReplaced){try{const summary=await updateMemory(memory.summary,content,{config,signal:abort.signal,onUsage:usage=>metrics.recordMemory(user.id,runId,config.model,usage)});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
+   if(useMemory&&!replyReplaced){try{const summary=await updateMemory(memory.summary,content,{config,budgetUser:user.id,signal:abort.signal,onUsage:usage=>metrics.recordMemory(user.id,runId,config.model,usage)});operations.rememberCharacter(user.id,conversation.character_id,summary,memory.revision,accountMemory.revision,config.version)}catch{memoryWarning='Reply saved, but memory could not be updated.'}}
   }catch(e){
    replyError=e.message.startsWith('AI ')?e.message:'AI service is temporarily unavailable. Your message was saved.';
    run("UPDATE chat_runs SET status='failed',error=?,completed=? WHERE id=? AND status='pending'",replyError,now(),runId);

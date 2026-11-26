@@ -1,4 +1,9 @@
 import http from 'node:http';
+import {createModelBudget} from './model-budget.mjs';
+import {setProviderBudget} from './ai-provider.mjs';
+import {createStaffSecurity} from './staff-security.mjs';
+import {createFeedback} from './feedback.mjs';
+import {clientIP} from './client-ip.mjs';
 import {DatabaseSync} from 'node:sqlite';
 import {randomBytes, scrypt as scryptCallback, timingSafeEqual, createHash, createHmac} from 'node:crypto';
 import {promisify} from 'node:util';
@@ -95,12 +100,16 @@ function verifyMutation(req,session){if(req.headers.origin!==ORIGIN)fail(403,'Or
 async function sendReset(email,token){const message={to:email,subject:'Reset your companion account password',text:`Reset your password within 15 minutes: ${ORIGIN}/#reset/${token}\nIf you did not request this, ignore this message.`};if(process.env.MAIL_MODE==='outbox'&&!production){const outbox=path.join(DATA,'outbox');fs.mkdirSync(outbox,{recursive:true,mode:0o700});fs.writeFileSync(path.join(outbox,id()+'.json'),JSON.stringify(message),{mode:0o600});return}if(!process.env.MAIL_WEBHOOK_URL||!process.env.MAIL_WEBHOOK_TOKEN)fail(503,'Email delivery is not configured');const destination=new URL(process.env.MAIL_WEBHOOK_URL);if(destination.protocol!=='https:')fail(503,'Email adapter requires HTTPS');const r=await fetch(destination,{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+process.env.MAIL_WEBHOOK_TOKEN},body:JSON.stringify(message),signal:AbortSignal.timeout(10000)});if(!r.ok)fail(503,'Email delivery is temporarily unavailable')}
 function grantOrder(order,eventKey){return management.grant(order,eventKey)}
 
+const staffSecurity=createStaffSecurity({db,data:DATA,fail,audit,now,passwordValid,limit});
+const feedback=createFeedback({db,transaction,fail,id,now,audit,text,limit});
+const modelBudget=createModelBudget({db,config:operations.config,transaction,now,fail,audit});
+setProviderBudget(modelBudget);
 const handleChat=createChatHandler({db,metrics,relationships,operations,transaction,audit,fail,now,id,text,json,limit,publicCharacter,visibleCharacter,pendingReplies,community,safety,management});
 
 async function api(req,res,url){const route=url.pathname,method=req.method,session=getSession(req);const isWrite=!['GET','HEAD'].includes(method);
   let accessActor=session?.user_id||null;
   if(route.startsWith('/api/admin/')||route==='/api/auth/admin-login')res.once('finish',()=>{try{rbac.logAccess(accessActor,accessActor?rbac.identity(accessActor)?.role:null,method,route,res.statusCode)}catch{console.error('Staff access audit failed')}});
-  if(session?.role==='user'&&req.headers['x-admin-context']!=='1'&&/^\/api\/(me|characters|conversations|favorites|wallet|orders|reports|chat|beta)(?:\/|$)/.test(route))res.once('finish',()=>{if(res.statusCode<400){try{metrics.touch(session.user_id)}catch{console.error('Activity recording failed')}}});
+  if(session?.role==='user'&&req.headers['x-admin-context']!=='1'&&/^\/api\/(me|characters|conversations|favorites|wallet|orders|reports|chat|beta|feedback)(?:\/|$)/.test(route))res.once('finish',()=>{if(res.statusCode<400){try{metrics.touch(session.user_id)}catch{console.error('Activity recording failed')}}});
   if(route==='/api/features'&&method==='GET')return json(res,200,operations.features());
   if(route==='/api/health'&&method==='GET')return json(res,200,{ok:true,modelEnabled:modelConfig().enabled});
   if(route==='/api/billing/webhook'&&method==='POST'){
@@ -115,25 +124,26 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   if(isWrite)verifyMutation(req,session);
   let body={};if(isWrite){if(!(req.headers['content-type']||'').startsWith('application/json'))fail(415,'JSON required');const raw=await readBody(req,['/api/admin/safety/import','/api/admin/safety/test'].includes(route)?1048576:65536);try{body=raw?JSON.parse(raw):{}}catch{fail(400,'Invalid JSON')}if(!body||Array.isArray(body)||typeof body!=='object')fail(400,'JSON object required')}
   if(route==='/api/auth/register'&&method==='POST'){
-    limit(`register:${req.socket.remoteAddress}`,6);const addr=email(body.email),name=text(body.name,60),pass=password(body.password);if(body.adult!==true)fail(400,'Confirm that you are at least 18');
+    limit(`register:${clientIP(req)}`,6);const addr=email(body.email),name=text(body.name,60),pass=password(body.password);if(body.adult!==true)fail(400,'Confirm that you are at least 18');
     if(one('SELECT id FROM users WHERE email=?',addr))fail(409,'This email is already registered');const uid=id(),digest=await passwordHash(pass);
     try{run('INSERT INTO users VALUES(?,?,?,?,?,?)',uid,addr,name,digest,'user',now())}catch(e){if(String(e).includes('UNIQUE'))fail(409,'This email is already registered');throw e}
     run('INSERT OR IGNORE INTO user_admin(user_id,adult_confirmed,source) VALUES(?,1,?)',uid,'direct');const user=one('SELECT * FROM users WHERE id=?',uid);const csrf=newSession(res,user);audit(uid,'account.created',uid);metrics.touch(uid);return json(res,201,{user:safeUser(user),csrf});
   }
   if(['/api/auth/login','/api/auth/admin-login'].includes(route)&&method==='POST'){
-    const addr=email(body.email);limit(`login:${req.socket.remoteAddress}`,30);limit(`account:${addr}`,12);const user=one('SELECT * FROM users WHERE email=?',addr);const pass=text(body.password,128);if(route==='/api/auth/admin-login')accessActor=user?.id||null;
+    const addr=email(body.email);limit(`login:${clientIP(req)}`,30);limit(`account:${addr}`,12);const user=one('SELECT * FROM users WHERE email=?',addr);const pass=text(body.password,128);if(route==='/api/auth/admin-login')accessActor=user?.id||null;
     // A real scrypt operation also runs for unknown accounts.
     const valid=await passwordValid(pass,user?.password||'00000000000000000000000000000000:'+Buffer.alloc(64).toString('hex'));if(!user||!valid||one('SELECT password FROM users WHERE id=?',user.id)?.password!==user.password)fail(401,'Incorrect email or password');
+    if(user.role==='admin')staffSecurity.verify(user.id,body.code);
     if(route==='/api/auth/admin-login'&&(user.role!=='admin'||!rbac.identity(user.id)))fail(403,'Administrator access required');if(rbac.identity(user.id)?.status==='disabled')fail(403,'Staff account is disabled');if(management.userState(user.id).status==='suspended')fail(403,'Account suspended. Contact the operator.');const csrf=newSession(res,user,route==='/api/auth/admin-login'?'admin_sid':'sid');if(route==='/api/auth/login')metrics.touch(user.id);return json(res,200,{user:safeUser(user),csrf});
   }
   if(route==='/api/auth/forgot'&&method==='POST'){
     if(!(process.env.MAIL_MODE==='outbox'&&!production)&&(!process.env.MAIL_WEBHOOK_URL||!process.env.MAIL_WEBHOOK_TOKEN))fail(503,'Email recovery is not configured. Contact the deployment operator.');
-    const addr=email(body.email);limit(`reset-ip:${req.socket.remoteAddress}`,10,3600000);limit(`reset-email:${addr}`,3,3600000);const user=one('SELECT id FROM users WHERE email=?',addr);
+    const addr=email(body.email);limit(`reset-ip:${clientIP(req)}`,10,3600000);limit(`reset-email:${addr}`,3,3600000);const user=one('SELECT id FROM users WHERE email=?',addr);
     if(user){const token=randomBytes(32).toString('hex');run('INSERT INTO password_resets VALUES(?,?,?,0)',hash(token),user.id,Date.now()+15*60000);try{await sendReset(addr,token)}catch(e){run('DELETE FROM password_resets WHERE token=?',hash(token));throw e}}
     return json(res,200,{ok:true,notice:'If an account exists, a password reset link will be sent.'});
   }
   if(route==='/api/auth/reset'&&method==='POST'){
-    limit(`reset-consume:${req.socket.remoteAddress}`,20,3600000);const token=text(body.token,128),digest=await passwordHash(password(body.password));
+    limit(`reset-consume:${clientIP(req)}`,20,3600000);const token=text(body.token,128),digest=await passwordHash(password(body.password));
     transaction(()=>{const reset=one('SELECT * FROM password_resets WHERE token=? AND used=0 AND expires>?',hash(token),Date.now());if(!reset)fail(400,'Reset link is invalid or expired');run('UPDATE users SET password=? WHERE id=?',digest,reset.user_id);run('UPDATE password_resets SET used=1 WHERE user_id=?',reset.user_id);run('DELETE FROM sessions WHERE user_id=?',reset.user_id);audit(reset.user_id,'password.reset',reset.user_id)});
     return json(res,200,{ok:true});
   }
@@ -147,6 +157,8 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   }
   if(/^\/api\/characters\/[^/]+$/.test(route)&&method==='GET')return json(res,200,{character:publicCharacter(visibleCharacter(route.split('/').pop(),session?{id:session.user_id}:null))});
   const {user}=authenticate(req);
+  if(route==='/api/feedback'&&method==='GET')return json(res,200,feedback.list(user.id,url.searchParams));
+  if(route==='/api/feedback'&&method==='POST')return json(res,201,{feedback:feedback.submit(user.id,body,req.headers['idempotency-key']||id())});
   if(route==='/api/beta/redeem'&&method==='POST')return json(res,200,beta.redeem(user,body));
   const relationshipRoute=route.match(/^\/api\/characters\/([^/]+)\/relationship$/);
   if(relationshipRoute&&['GET','PATCH'].includes(method)){const cid=relationshipRoute[1];visibleCharacter(cid,user,true);return json(res,200,{relationship:method==='PATCH'?relationships.saveAnniversaries(user.id,cid,body):relationships.state(user.id,cid)})}
@@ -176,6 +188,7 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
       run('DELETE FROM moderation_evidence WHERE target_id IN (SELECT m.id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE c.user_id=?)',user.id);
       run('UPDATE reports SET reporter=NULL WHERE reporter=?',user.id);
       run('DELETE FROM audit WHERE actor=? OR target=?',user.id,user.id);
+      run('UPDATE model_spend SET user_id=NULL WHERE user_id=?',user.id);
       run('DELETE FROM users WHERE id=?',user.id);
       audit(null,'account.deleted',null);
     });
@@ -188,7 +201,7 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   if(route==='/api/auth/logout'&&method==='POST'){run('DELETE FROM sessions WHERE token=?',session.token);res.setHeader('Set-Cookie',`${sessionCookie(req)}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${production?'; Secure':''}`);return json(res,200,{ok:true})}
   if(route==='/api/me'&&method==='PATCH'){const name=text(body.name,60);run('UPDATE users SET name=? WHERE id=?',name,user.id);return json(res,200,{user:{...user,name}})}
   if(route==='/api/auth/password'&&method==='POST'){const u=one('SELECT * FROM users WHERE id=?',user.id);if(!await passwordValid(text(body.currentPassword,128),u.password))fail(403,'Current password is incorrect');const digest=await passwordHash(password(body.password));transaction(()=>{run('UPDATE users SET password=? WHERE id=?',digest,user.id);run('DELETE FROM sessions WHERE user_id=?',user.id);audit(user.id,'password.changed',user.id)});if(management.userState(user.id).status==='suspended')fail(403,'Account suspended. Contact the operator.');const csrf=newSession(res,user,sessionCookie(req));return json(res,200,{ok:true,csrf})}
-  if(route==='/api/me/export'&&method==='GET'){return json(res,200,{user,activityDays:all('SELECT day,first_seen,last_seen,source FROM user_activity_days WHERE user_id=?',user.id),memoryUsage:all('SELECT model,input_tokens,output_tokens,created FROM memory_usage WHERE user_id=?',user.id),relationshipEvents:all('SELECT character_id,xp,rule_version,created FROM relationship_events WHERE user_id=?',user.id),relationshipMilestones:all('SELECT character_id,level,created FROM relationship_milestones WHERE user_id=?',user.id),relationships:all('SELECT character_id,xp,level,started,anniversaries FROM relationships WHERE user_id=?',user.id),relationshipMemories:all('SELECT character_id,summary,enabled,revision,updated FROM relationship_memories WHERE user_id=?',user.id),moderation:community.mine(user.id),spending:economy.balance(user.id),reports:all('SELECT id,target_type,target_id,reason,status,resolution,created FROM reports WHERE reporter=?',user.id),memory:operations.memory(user.id),chatAccess:operations.access(user.id),characters:all('SELECT * FROM characters WHERE owner_id=?',user.id),favorites:all('SELECT * FROM favorites WHERE user_id=?',user.id),conversations:all('SELECT * FROM conversations WHERE user_id=?',user.id),messages:all('SELECT messages.* FROM messages JOIN conversations ON conversations.id=messages.conversation_id WHERE conversations.user_id=?',user.id),orders:all('SELECT * FROM orders WHERE user_id=?',user.id),ledger:all('SELECT * FROM ledger WHERE user_id=?',user.id)})}
+  if(route==='/api/me/export'&&method==='GET'){return json(res,200,{user,feedback:all('SELECT * FROM feedback WHERE user_id=?',user.id),activityDays:all('SELECT day,first_seen,last_seen,source FROM user_activity_days WHERE user_id=?',user.id),memoryUsage:all('SELECT model,input_tokens,output_tokens,created FROM memory_usage WHERE user_id=?',user.id),relationshipEvents:all('SELECT character_id,xp,rule_version,created FROM relationship_events WHERE user_id=?',user.id),relationshipMilestones:all('SELECT character_id,level,created FROM relationship_milestones WHERE user_id=?',user.id),relationships:all('SELECT character_id,xp,level,started,anniversaries FROM relationships WHERE user_id=?',user.id),relationshipMemories:all('SELECT character_id,summary,enabled,revision,updated FROM relationship_memories WHERE user_id=?',user.id),moderation:community.mine(user.id),spending:economy.balance(user.id),reports:all('SELECT id,target_type,target_id,reason,status,resolution,created FROM reports WHERE reporter=?',user.id),memory:operations.memory(user.id),chatAccess:operations.access(user.id),characters:all('SELECT * FROM characters WHERE owner_id=?',user.id),favorites:all('SELECT * FROM favorites WHERE user_id=?',user.id),conversations:all('SELECT * FROM conversations WHERE user_id=?',user.id),messages:all('SELECT messages.* FROM messages JOIN conversations ON conversations.id=messages.conversation_id WHERE conversations.user_id=?',user.id),orders:all('SELECT * FROM orders WHERE user_id=?',user.id),ledger:all('SELECT * FROM ledger WHERE user_id=?',user.id)})}
   if(route==='/api/characters'&&method==='POST'){if(!operations.features().features.createCharacter)fail(404,'Feature disabled');
     const name=text(body.name,60),age=Number(body.age);if(!Number.isInteger(age)||age<18||age>100)fail(400,'Age must be 18–100');if(!['Realistic','Anime'].includes(body.style))fail(400,'Invalid style');if(!['female','male'].includes(body.gender))fail(400,'Invalid gender');
     const image=text(body.image,200);if(!catalog.some(c=>c.image===image))fail(400,'Choose an existing library image');if(one('SELECT COUNT(*) AS n FROM characters WHERE owner_id=?',user.id).n>=100)fail(409,'Character limit reached');const cid=id();run('INSERT INTO characters VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',cid,user.id,name,age,body.style,body.gender,text(body.description||'',1000,false),image,null,null,JSON.stringify({personality:text(body.personality||'Friendly',100),voice:text(body.voice||'Not connected',80)}),now());return json(res,201,{character:publicCharacter(one('SELECT * FROM characters WHERE id=?',cid))})
@@ -215,9 +228,12 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
   if(route.startsWith('/api/admin/')){
     if(user.role!=='admin')fail(403,'Administrator access required');
     const staff=rbac.authorize(user.id,method,route);user.staffRole=staff.role;user.permissions=staff.permissions;
+    if(/^\/api\/admin\/self\/mfa\/(status|setup|enable|disable)$/.test(route))return json(res,200,await staffSecurity.handle(user.id,route.split('/').pop(),body));
+    if(route==='/api/admin/feedback'&&method==='GET')return json(res,200,feedback.list(null,url.searchParams));
+    if(/^\/api\/admin\/feedback\/[^/]+$/.test(route)&&method==='PATCH')return json(res,200,{feedback:feedback.resolve(user.id,route.split('/').pop(),body)});
     if(await rbac.handle(req,res,url,user,body))return;
     if(await safety.handle(req,res,url,user,body))return;
-    if(route==='/api/admin/metrics'&&method==='GET'){const report=metrics.report(url.searchParams);return json(res,200,{...report,inviteCohorts:beta.cohorts(report.range)})}
+    if(route==='/api/admin/metrics'&&method==='GET'){const report=metrics.report(url.searchParams);return json(res,200,{...report,modelBudgetToday:modelBudget.totals(),inviteCohorts:beta.cohorts(report.range)})}
     if(route==='/api/admin/relationship-rules'&&method==='GET')return json(res,200,{config:relationships.config()});
     if(route==='/api/admin/relationship-rules'&&method==='PUT')return json(res,200,{config:relationships.saveConfig(body,user.id)});
     if(route==='/api/admin/pricing-rules'&&method==='GET')return json(res,200,{rules:economy.rules()});
@@ -231,7 +247,8 @@ async function api(req,res,url){const route=url.pathname,method=req.method,sessi
     if(reportRoute&&method==='POST'&&reportRoute[2])return json(res,200,{report:community.resolve(user.id,reportRoute[1],body)});
     if(await beta.handle(req,res,url,user,body))return;
     if(await management.handle(req,res,url,user,body))return;
-    if(route==='/api/admin/config'&&method==='GET')return json(res,200,{config:operations.config(),stats:operations.stats(),providerConfigured:modelConfig().enabled});
+    if(route==='/api/admin/health'&&method==='GET'){let monitor=null;try{monitor=JSON.parse(fs.readFileSync(path.join(DATA,'health-status.json'),'utf8'))}catch{}return json(res,200,{mailConfigured:!!(process.env.MAIL_WEBHOOK_URL&&process.env.MAIL_WEBHOOK_TOKEN),trustedLoopbackProxy:process.env.TRUST_PROXY_LOOPBACK==='true',monitor,monitorStale:!monitor||Date.now()-Date.parse(monitor.checked)>600000,budget:modelBudget.totals()})}
+    if(route==='/api/admin/config'&&method==='GET')return json(res,200,{config:operations.config(),stats:operations.stats(),budgetUsage:modelBudget.totals(),providerConfigured:modelConfig().enabled});
     if(route==='/api/admin/config'&&method==='PUT')return json(res,200,{config:operations.saveConfig(body,user.id)});
     if(route==='/api/admin/summary'&&method==='GET')return json(res,200,{users:one('SELECT COUNT(*) AS n FROM users').n,characters:one('SELECT COUNT(*) AS n FROM characters').n,conversations:one('SELECT COUNT(*) AS n FROM conversations').n,pendingOrders:one("SELECT COUNT(*) AS n FROM orders WHERE status='pending'").n,modelEnabled:modelConfig().enabled});
     if(route==='/api/admin/users'&&method==='GET')return json(res,200,{users:all('SELECT id,email,name,role,created,(SELECT COALESCE(SUM(delta),0) FROM ledger WHERE user_id=users.id) AS balance FROM users ORDER BY created DESC LIMIT 200').map(u=>({...u,chatAccess:operations.access(u.id)}))});

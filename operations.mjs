@@ -1,3 +1,4 @@
+import {budgetDefaults,validateBudget} from './model-budget.mjs';
 import {modelConfig} from './openai.mjs';
 
 export function createOperations({db,transaction,audit,fail,now}) {
@@ -9,11 +10,11 @@ export function createOperations({db,transaction,audit,fail,now}) {
  CREATE INDEX IF NOT EXISTS chat_runs_user ON chat_runs(user_id,status);
  UPDATE chat_runs SET status='failed',error='AI service interrupted. Please retry.' WHERE status='pending';`);
  const defaultFeatures={shorts:false,collection:false,premium:true,wallet:true,createCharacter:true,voice:false,image:false};
- const defaults={betaMode:false,features:defaultFeatures,preferReviewed:true,outputFallback:'这部分内容不适合继续，我们换个安全的话题吧。',chatEnabled:true,streamEnabled:true,memoryEnabled:true,quotaEnabled:true,freeMessageLimit:5,model:modelConfig().model,maxOutputTokens:500,contextMessages:20,systemPrompt:'Be warm, attentive and concise. Offer ordinary companionship and respect user boundaries.'};
+ const defaults={budget:budgetDefaults,betaMode:false,features:defaultFeatures,preferReviewed:true,outputFallback:'这部分内容不适合继续，我们换个安全的话题吧。',chatEnabled:true,streamEnabled:true,memoryEnabled:true,quotaEnabled:true,freeMessageLimit:5,model:modelConfig().model,maxOutputTokens:500,contextMessages:20,systemPrompt:'Be warm, attentive and concise. Offer ordinary companionship and respect user boundaries.'};
  run('INSERT OR IGNORE INTO operation_config VALUES(1,?,1)',JSON.stringify(defaults));
  function config(){const row=one('SELECT * FROM operation_config WHERE id=1');return {...defaults,...JSON.parse(row.value),version:row.version}}
  function saveConfig(body,actor){
-  const old=config(),next={betaMode:body.betaMode??old.betaMode,preferReviewed:body.preferReviewed??old.preferReviewed,features:{...defaultFeatures,...old.features,...body.features},outputFallback:body.outputFallback??old.outputFallback};
+  const old=config(),next={budget:validateBudget({...budgetDefaults,...old.budget,...body.budget},fail),betaMode:body.betaMode??old.betaMode,preferReviewed:body.preferReviewed??old.preferReviewed,features:{...defaultFeatures,...old.features,...body.features},outputFallback:body.outputFallback??old.outputFallback};
   if(typeof next.betaMode!=='boolean'||typeof next.preferReviewed!=='boolean'||typeof next.outputFallback!=='string'||!next.outputFallback.trim()||next.outputFallback.length>500||Object.keys(next.features).some(k=>!Object.hasOwn(defaultFeatures,k)||typeof next.features[k]!=='boolean'))fail(400,'Invalid feature configuration');
   for(const key of ['chatEnabled','streamEnabled','memoryEnabled','quotaEnabled']){if(typeof body[key]!=='boolean')fail(400,'Invalid configuration');next[key]=body[key]}
   for(const [key,min,max] of [['freeMessageLimit',0,1000],['maxOutputTokens',64,4096],['contextMessages',2,60]]){if(!Number.isInteger(body[key])||body[key]<min||body[key]>max)fail(400,'Invalid configuration');next[key]=body[key]}

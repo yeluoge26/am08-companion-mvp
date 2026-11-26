@@ -20,11 +20,12 @@ test('metrics use real retained facts, exclude admins, and distinguish retention
  clock='2026-01-02T12:00:00.000Z';metrics.touch('u');metrics.touch('u');db.prepare('INSERT INTO users VALUES(?,?,?)').run('u2','user',clock);metrics.touch('u2');metrics.touch('admin');
  clock='2026-01-05T12:00:00.000Z';metrics.touch('u2');metrics.recordMemory('u','r1','test-model',{input_tokens:7,output_tokens:3});metrics.recordMemory('u','r1','test-model',{input_tokens:999,output_tokens:999});metrics.recordMemory('u2','unknown','test-model',null);
  clock='2026-01-08T12:00:00.000Z';metrics.touch('u');clock='2026-01-10T12:00:00.000Z';metrics.touch('u');metrics.touch('u');metrics=createMetrics(deps);
+ db.prepare("INSERT INTO chat_runs VALUES('blocked','u','blocked',NULL,'test-model','2026-01-10T12:00:00.000Z')").run();
  const r=metrics.report(new URLSearchParams({from:'2026-01-01',to:'2026-01-10'}));
  assert.deepEqual(r.summary,{registered:2,totalUsers:3,active:2,dau:1,wau:2,mau:3});assert.equal(r.coverage.completeActivityFrom,'2026-01-02');
  assert.equal(r.daily[0].activityCoverage,'partial_history');assert.equal(r.daily.at(-1).activityCoverage,'in_progress');
  assert.equal(r.retention[0].periods[0].rate,1);assert.equal(r.retention[0].periods[1].rate,1);assert.equal(r.retention[1].periods[0].rate,0);assert.equal(r.retention[0].periods[2].status,'pending');assert.equal(r.retention[0].periods[2].rate,null);
- assert.deepEqual(r.chat,{attempts:3,completed:1,failed:1,pending:1,inputTokens:100,outputTokens:30,usageKnown:1,usageUnknown:2,messages:2});assert.equal(r.models.length,1);
+ assert.deepEqual(r.chat,{attempts:4,completed:1,failed:1,blocked:1,pending:1,inputTokens:100,outputTokens:30,usageKnown:1,usageUnknown:3,messages:2});assert.equal(r.models.length,1);
  assert.equal(r.memory.inputTokens,7);assert.equal(r.memory.outputTokens,3);assert.equal(r.memory.recordedCalls,2);assert.equal(r.memory.usageUnknown,1);
  assert.deepEqual(r.tokens,{inflow:100,consumed:4,refundReversal:10,adminDebit:3,otherDebit:2,net:81,currentHeld:2});assert.deepEqual(r.consumptionByAction,[{action:'image',tokens:4}]);
  const old=metrics.report(new URLSearchParams({from:'2025-12-31',to:'2026-01-01'}));assert.equal(old.retention[0].periods[0].status,'insufficient_history');assert.equal(old.retention[0].periods[0].rate,null);

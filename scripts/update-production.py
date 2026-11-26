@@ -5,7 +5,7 @@ import os, time, tarfile, paramiko, shlex, hashlib, json, subprocess, io
 root = Path(__file__).resolve().parents[1]
 release = '/opt/candy-mvp/releases/' + time.strftime('%Y%m%d-%H%M%S')
 archive = root / 'data' / 'code-update.tar.gz'
-files=list(root.glob('*.mjs')) + [root/'package.json',root/'scripts/operator.mjs',root/'scripts/apply-character-prompts.mjs',root/'character-personas.json'] + [p for p in (root/'public').iterdir() if p.is_file()]
+files=list(root.glob('*.mjs')) + [root/'package.json',root/'scripts/operator.mjs',root/'scripts/health-check.mjs',root/'scripts/apply-character-prompts.mjs',root/'character-personas.json'] + [p for p in (root/'public').iterdir() if p.is_file()]
 manifest={'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'files':{p.relative_to(root).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in files}}
 with tarfile.open(archive, 'w:gz') as tar:
     for p in files: tar.add(p, arcname=p.relative_to(root))

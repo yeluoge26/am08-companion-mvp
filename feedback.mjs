@@ -1,0 +1,14 @@
+export function createFeedback({db,transaction,fail,id,now,audit,text,limit}){
+ db.exec(`CREATE TABLE IF NOT EXISTS feedback(id TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,category TEXT NOT NULL,message_id TEXT,character_id TEXT,content TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'open',reply TEXT NOT NULL DEFAULT '',version INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL,updated TEXT NOT NULL,request_key TEXT NOT NULL,UNIQUE(user_id,request_key));`);
+ const categories=['general','repetition','memory','persona','irrelevant','account','bug'];
+ function submit(uid,b,key){
+  const content=text(b.content,2000),category=b.category||'general';if(!categories.includes(category))fail(400,'Invalid feedback category');key=text(key,100);
+  const old=db.prepare('SELECT * FROM feedback WHERE user_id=? AND request_key=?').get(uid,key);if(old){if(old.content!==content||old.category!==category||old.message_id!==(b.messageId||null))fail(409,'Idempotency conflict');return old}
+  limit('feedback:'+uid,10,3600000);
+  let message;if(b.messageId){message=db.prepare('SELECT m.id,c.character_id FROM messages m JOIN conversations c ON c.id=m.conversation_id WHERE m.id=? AND c.user_id=?').get(text(b.messageId,64),uid);if(!message)fail(404,'Message not found')}
+  const fid=id(),time=now();db.prepare('INSERT INTO feedback(id,user_id,category,message_id,character_id,content,created,updated,request_key) VALUES(?,?,?,?,?,?,?,?,?)').run(fid,uid,category,message?.id||null,message?.character_id||null,content,time,time,key);audit(uid,'feedback.created',fid,{category});return db.prepare('SELECT * FROM feedback WHERE id=?').get(fid);
+ }
+ function list(uid,params){const page=Math.max(1,Math.min(100000,Number(params.get('page'))||1));const status=params.get('status')||'';if(status&&!['open','in_progress','resolved'].includes(status))fail(400,'Invalid feedback status');const where='WHERE (? IS NULL OR user_id=?) AND (?=\'\' OR status=?)',args=[uid,uid,status,status];return {page,items:db.prepare('SELECT * FROM feedback '+where+' ORDER BY created DESC,id DESC LIMIT 50 OFFSET ?').all(...args,(page-1)*50),total:db.prepare('SELECT COUNT(*) n FROM feedback '+where).get(...args).n}}
+ function resolve(actor,fid,b){if(!['open','in_progress','resolved'].includes(b.status))fail(400,'Invalid feedback status');const reply=text(b.reply,2000,b.status==='resolved'),reason=text(b.reason,500);return transaction(()=>{const old=db.prepare('SELECT * FROM feedback WHERE id=?').get(fid);if(!old)fail(404,'Feedback not found');if(b.version!==old.version)fail(409,'Feedback changed. Reload and retry.');db.prepare('UPDATE feedback SET status=?,reply=?,version=version+1,updated=? WHERE id=?').run(b.status,reply,now(),fid);audit(actor,'feedback.updated',fid,{status:b.status,reason});return db.prepare('SELECT * FROM feedback WHERE id=?').get(fid)})}
+ return {submit,list,resolve};
+}
