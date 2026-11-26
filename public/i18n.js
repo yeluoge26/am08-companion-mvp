@@ -1,7 +1,8 @@
 (() => {
 'use strict';
 // Exact UI phrases only. User-authored content is explicitly marked translate="no".
-const zh = Object.fromEntries(`First redemption within the selected date range; retention uses completed UTC days.|按所选日期范围内首次兑换的用户分组，以完整 UTC 日期计算留存。
+const zh = Object.fromEntries(`Relationship & memory|关系与记忆
+First redemption within the selected date range; retention uses completed UTC days.|按所选日期范围内首次兑换的用户分组，以完整 UTC 日期计算留存。
 shorts|短视频
 collection|合集
 premium|订阅页
@@ -797,7 +798,7 @@ function apply(root=document.body){
   const output=t(source);originals.set(node,{source,output});if(node.nodeValue!==output)node.nodeValue=output;
  }
  for(const el of root.querySelectorAll('[placeholder],[aria-label],[title]')){
-  if(blocked(el))continue;
+  if(el.closest('script,style,[translate="no"]'))continue;
   const saved=attributes.get(el)||{};
   for(const attr of ['placeholder','aria-label','title'])if(el.hasAttribute(attr)){
    const value=el.getAttribute(attr),old=saved[attr],source=old&&value===old.output?old.source:value,output=t(source);
