@@ -1,7 +1,8 @@
 FROM node:24-alpine
 WORKDIR /app
-COPY --chown=node:node package.json server.mjs ./
+COPY --chown=node:node package.json *.mjs character-personas.json ./
 COPY --chown=node:node public ./public
+COPY --chown=node:node scripts/*.mjs ./scripts/
 RUN mkdir -p /app/data && chown node:node /app/data
 USER node
 ENV HOST=0.0.0.0 PORT=4180 DATA_DIR=/app/data

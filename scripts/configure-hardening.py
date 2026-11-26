@@ -1,15 +1,15 @@
 """Configure the existing authorized deployment without replacing secrets or TLS."""
-import os, json, base64, paramiko
+import os, json, ipaddress, requests, paramiko
+networks=[]
+for family in ['v4','v6']:
+ r=requests.get('https://www.cloudflare.com/ips-'+family+'/',timeout=30);r.raise_for_status();networks += [str(ipaddress.ip_network(x.strip())) for x in r.text.splitlines() if x.strip()]
+assert 15 <= len(networks) <= 100
 c=paramiko.SSHClient();c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 c.connect('139.180.222.17',username='root',password=os.environ['DEPLOY_SSH_PASSWORD'],look_for_keys=False,allow_agent=False,timeout=20)
 source=r'''
 import pathlib,urllib.request,ipaddress,subprocess
 def run(*args):subprocess.run(args,check=True)
-networks=[]
-for family in ['v4','v6']:
- raw=urllib.request.urlopen('https://www.cloudflare.com/ips-'+family+'/',timeout=30).read().decode()
- networks += [str(ipaddress.ip_network(x.strip())) for x in raw.splitlines() if x.strip()]
-assert 15 <= len(networks) <= 100
+networks=NETWORK_LIST
 snippet=pathlib.Path('/etc/nginx/snippets/am08-client-ip.conf')
 snippet.write_text('# Trusted Cloudflare prefixes; refresh when upstream publishes changes.\n'+'\n'.join('set_real_ip_from '+x+';' for x in networks)+'\nreal_ip_header CF-Connecting-IP;\n')
 site=pathlib.Path('/etc/nginx/sites-available/am08.one');before=site.read_text();after=before
@@ -29,7 +29,6 @@ run('systemctl','daemon-reload');run('systemctl','reload','nginx');run('systemct
 print('Trusted client IP configured; backup and local health timers enabled')
 '''
 try:
- command="python3 -c \"import base64;exec(base64.b64decode('"+base64.b64encode(source.encode()).decode()+"'))\""
- _,out,err=c.exec_command(command,timeout=180);result=out.read().decode();error=err.read().decode();code=out.channel.recv_exit_status();print(result);print(error)
+ stdin,out,err=c.exec_command('python3 -',timeout=180);stdin.write(source.replace('NETWORK_LIST',repr(networks)));stdin.channel.shutdown_write();result=out.read().decode();error=err.read().decode();code=out.channel.recv_exit_status();print(result);print(error)
  if code:raise RuntimeError('Configuration failed')
 finally:c.close()
